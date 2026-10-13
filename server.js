@@ -24,7 +24,7 @@ import {
     isTelegramReady 
 } from './src/tgService.js';
 import { getCachedChunk, setCachedChunk, getCacheStats } from './src/cache.js';
-import { renderPlayerHtml, renderDashboardHtml } from './src/views.js';
+import { renderPlayerHtml, renderPureEmbedHtml, renderDashboardHtml } from './src/views.js';
 import { findAnimeEpisode, loadCatalog, registerAnimeEpisode } from './src/catalogService.js';
 
 dotenv.config();
@@ -142,6 +142,68 @@ app.get('/player/mal/:id/:ep/:track?', async (req, res) => {
         poster: item.poster,
         anilistId: item.anilistId,
         malId: item.malId,
+        subtitles: item.subtitles || []
+    }));
+});
+
+// Pure Edge-to-Edge Embed Routes for External Websites (<iframe src="...">)
+app.get('/embed/:messageId', async (req, res) => {
+    try {
+        const messageId = parseInt(req.params.messageId, 10);
+        const meta = await getVideoMetadata(messageId);
+        if (!meta) return res.status(404).send("Video not found");
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.setHeader('X-Frame-Options', 'ALLOWALL');
+        res.send(renderPureEmbedHtml({
+            streamUrl: `/stream/${messageId}`,
+            title: meta.fileName,
+            episode: 1,
+            track: 'sub',
+            subtitles: []
+        }));
+    } catch (err) {
+        res.status(500).send(`Embed Error: ${err.message}`);
+    }
+});
+
+app.get('/embed/ani/:id/:ep/:track?', async (req, res) => {
+    const item = findAnimeEpisode({
+        anilistId: req.params.id,
+        episode: req.params.ep,
+        track: req.params.track || 'sub'
+    });
+    if (!item) {
+        return res.status(404).send(`Anime episode not found (AniList #${req.params.id}, EP ${req.params.ep})`);
+    }
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('X-Frame-Options', 'ALLOWALL');
+    res.send(renderPureEmbedHtml({
+        streamUrl: item.streamUrl || `/stream/${item.telegramMessageId}`,
+        title: item.title,
+        episode: item.episode,
+        track: item.track,
+        poster: item.poster,
+        subtitles: item.subtitles || []
+    }));
+});
+
+app.get('/embed/mal/:id/:ep/:track?', async (req, res) => {
+    const item = findAnimeEpisode({
+        malId: req.params.id,
+        episode: req.params.ep,
+        track: req.params.track || 'sub'
+    });
+    if (!item) {
+        return res.status(404).send(`Anime episode not found (MAL #${req.params.id}, EP ${req.params.ep})`);
+    }
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('X-Frame-Options', 'ALLOWALL');
+    res.send(renderPureEmbedHtml({
+        streamUrl: item.streamUrl || `/stream/${item.telegramMessageId}`,
+        title: item.title,
+        episode: item.episode,
+        track: item.track,
+        poster: item.poster,
         subtitles: item.subtitles || []
     }));
 });
