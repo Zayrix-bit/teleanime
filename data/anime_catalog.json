@@ -1,5 +1,22 @@
 [
   {
+    "key": "ani:151807:1:sub",
+    "title": "Solo Leveling",
+    "anilistId": 151807,
+    "malId": 52299,
+    "episode": 1,
+    "track": "sub",
+    "telegramMessageId": 7,
+    "streamUrl": "/stream/7",
+    "playerUrl": "/player/7",
+    "resolution": "1080p",
+    "sizeBytes": 294178816,
+    "sizeMB": "280.55",
+    "durationSec": 1420,
+    "poster": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx151807-3CDu9DE9u7i6.jpg",
+    "uploadedAt": "2026-10-14T02:18:49.000Z"
+  },
+  {
     "key": "ani:21:1:sub",
     "title": "ONE PIECE",
     "anilistId": 21,
