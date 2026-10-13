@@ -209,7 +209,10 @@ export function renderPlayerHtml({
         <div class="video-container">
             <video controls autoplay playsinline preload="metadata">
                 <source src="${streamUrl}" type="video/mp4">
-                ${subtitles.map(s => `<track kind="captions" label="${s.label || 'English'}" src="${s.url}" default>`).join('\n                ')}
+                ${subtitles.map(s => {
+                    const src = s.url ? `/api/proxy/vtt?url=${encodeURIComponent(s.url)}` : (s.proxy_url || '');
+                    return `<track kind="captions" label="${s.label || 'English'}" src="${src}" default>`;
+                }).join('\n                ')}
                 Your browser does not support HTML5 video streaming.
             </video>
         </div>

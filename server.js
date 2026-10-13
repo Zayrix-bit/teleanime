@@ -257,6 +257,28 @@ app.get('/stream/mal/:id/:ep/:track?', async (req, res) => {
     return handleTelegramStream(req, res, item.telegramMessageId);
 });
 
+app.get('/api/proxy/vtt', async (req, res) => {
+    const { url } = req.query;
+    if (!url) return res.status(400).send("Missing url param");
+    try {
+        const subRes = await fetch(url, {
+            headers: {
+                "Referer": "https://megaplay.buzz/",
+                "User-Agent": "Mozilla/5.0"
+            }
+        });
+        if (!subRes.ok) throw new Error(`Status ${subRes.status}`);
+        const text = await subRes.text();
+        res.setHeader('Content-Type', 'text/vtt; charset=utf-8');
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        res.send(text);
+    } catch (err) {
+        console.error("VTT Proxy Error:", err.message);
+        res.status(500).send(`Failed to proxy subtitle: ${err.message}`);
+    }
+});
+
 // ─────────────────────────────────────────────────────────────
 // 3. APIS: UPLOAD & FILE LISTING
 // ─────────────────────────────────────────────────────────────
