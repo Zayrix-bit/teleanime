@@ -1,0 +1,80 @@
+name: Fast Anime Stream Ingestion Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      id:
+        description: 'Anime AniList or MAL ID (e.g. 21, 151807, 166783)'
+        required: true
+        default: '151807'
+      type:
+        description: 'ID Provider (ani or mal)'
+        required: true
+        default: 'ani'
+        type: choice
+        options:
+          - ani
+          - mal
+      episode:
+        description: 'Episode Number (e.g. 1, 2, 12)'
+        required: true
+        default: '1'
+      track:
+        description: 'Audio Track (sub or dub)'
+        required: true
+        default: 'sub'
+        type: choice
+        options:
+          - sub
+          - dub
+      megaplay_api:
+        description: 'MegaPlay Scraper API URL'
+        required: false
+        default: 'http://54.39.22.90:4004'
+      vps_catalog_webhook:
+        description: 'Telegram Streamer Callback URL (registers into anime_catalog.json)'
+        required: false
+        default: 'http://54.39.22.90:4015/api/catalog/register'
+
+jobs:
+  ingest_and_upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout Code Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js Runtime
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install FFmpeg & Media Tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+
+      - name: Install Node Dependencies
+        run: npm ci || npm install
+
+      - name: Execute Parallel Ingestion & Telegram Upload
+        env:
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID || '38731827' }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH || 'f52eaaae40fbc572fcf046c82f620054' }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || '8902447483:AAH-zDT_BUwV3WmuW9dvkdAVKWlHP4fJowI' }}
+          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID || '-1004305106563' }}
+          MEGAPLAY_API: ${{ inputs.megaplay_api }}
+          VPS_CALLBACK_URL: ${{ inputs.vps_catalog_webhook }}
+        run: |
+          echo "=========================================================="
+          echo "🚀 STARTING HIGH-SPEED INGESTION RUNNER"
+          echo "Target Anime: ${{ inputs.type }}:${{ inputs.id }} Ep:${{ inputs.episode }} [${{ inputs.track }}]"
+          echo "=========================================================="
+          node ingest.js --id ${{ inputs.id }} --type ${{ inputs.type }} --ep ${{ inputs.episode }} --track ${{ inputs.track }}
+
+      - name: Pipeline Completed Summary
+        run: |
+          echo "🎉 Episode successfully ingested, merged, and uploaded to Telegram Storage Channel!"
+          echo "Mapping record sent to catalog webhook."

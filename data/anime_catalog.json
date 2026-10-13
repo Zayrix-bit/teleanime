@@ -1,0 +1,36 @@
+[
+  {
+    "key": "ani:166783:1:sub",
+    "title": "Mushoku Tensei: Jobless Reincarnation Season 2 Part 2",
+    "anilistId": 166783,
+    "malId": 54595,
+    "episode": 1,
+    "track": "sub",
+    "telegramMessageId": 5,
+    "streamUrl": "/stream/5",
+    "playerUrl": "/player/5",
+    "resolution": "HD",
+    "sizeBytes": 82446480,
+    "sizeMB": "78.63",
+    "durationSec": 1420,
+    "poster": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx166783-sU9V72t6J0wX.jpg",
+    "uploadedAt": "2026-10-14T01:39:50.000Z"
+  },
+  {
+    "key": "ani:110277:1:sub",
+    "title": "Attack on Titan Final Season",
+    "anilistId": 110277,
+    "malId": 40028,
+    "episode": 1,
+    "track": "sub",
+    "telegramMessageId": 4,
+    "streamUrl": "/stream/4",
+    "playerUrl": "/player/4",
+    "resolution": "1080p",
+    "sizeBytes": 22362,
+    "sizeMB": "0.02",
+    "durationSec": 1430,
+    "poster": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx110277-sz2VOtBAjpt8.png",
+    "uploadedAt": "2026-10-14T01:30:37.000Z"
+  }
+]

@@ -1,0 +1,7 @@
+node_modules/
+temp_uploads/
+temp_ingest_*
+.env
+.telegram_session.txt
+*.log
+.DS_Store
