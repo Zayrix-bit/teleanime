@@ -17,7 +17,7 @@ import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
 import dotenv from 'dotenv';
-import { registerAnimeEpisode } from './src/catalogService.js';
+import { registerAnimeEpisode, findAnimeEpisode } from './src/catalogService.js';
 
 dotenv.config();
 
@@ -28,21 +28,32 @@ const CHANNEL_ID = process.env.TELEGRAM_CHANNEL_ID || '-1004305106563';
 const MEGAPLAY_API = process.env.MEGAPLAY_API || 'http://127.0.0.1:4004';
 const VPS_CALLBACK_URL = process.env.VPS_CALLBACK_URL || '';
 
-// Parse CLI flags: --id 21 --ep 1 --type ani --track sub
+// Parse CLI flags: --id 21 --ep 1 --start-ep 1 --end-ep 25 --type ani --track sub
 function parseArgs() {
     const args = process.argv.slice(2);
     const opts = {
         id: 21,
         type: 'ani',
-        ep: 1,
+        ep: null,
+        startEp: null,
+        endEp: null,
         track: 'sub'
     };
     for (let i = 0; i < args.length; i++) {
         if (args[i] === '--id' || args[i] === '-i') opts.id = parseInt(args[++i], 10);
         if (args[i] === '--type' || args[i] === '-t') opts.type = args[++i].toLowerCase();
         if (args[i] === '--ep' || args[i] === '-e') opts.ep = parseInt(args[++i], 10);
+        if (args[i] === '--start-ep' || args[i] === '--start') opts.startEp = parseInt(args[++i], 10);
+        if (args[i] === '--end-ep' || args[i] === '--end') opts.endEp = parseInt(args[++i], 10);
         if (args[i] === '--track') opts.track = args[++i].toLowerCase();
     }
+    if (opts.ep !== null && opts.startEp === null) {
+        opts.startEp = opts.ep;
+        opts.endEp = opts.ep;
+    }
+    if (opts.startEp === null) opts.startEp = 1;
+    if (opts.endEp === null) opts.endEp = opts.startEp;
+
     return opts;
 }
 
@@ -177,45 +188,41 @@ async function downloadAndConcatHls(masterUrl, outputDir, title, ep) {
     return finalMp4Path;
 }
 
-// 4. Main Ingestion Orchestrator
-async function run() {
-    const { id, type, ep, track } = parseArgs();
-    console.log("==================================================");
-    console.log(`🚀 STARTING ANIME INGESTION PIPELINE`);
-    console.log(`   Type: ${type.toUpperCase()} | ID: ${id} | Episode: ${ep} | Track: ${track}`);
-    console.log("==================================================");
+// 4. Ingest Single Episode with retry and skip check
+async function ingestSingleEpisode(meta, ep, track, type, client, channel) {
+    console.log(`\n--------------------------------------------------`);
+    console.log(`▶ PROCESSING: ${meta.title} - EPISODE ${ep} [${track.toUpperCase()}]`);
+    console.log(`--------------------------------------------------`);
 
-    const workDir = path.resolve(`temp_ingest_${Date.now()}`);
+    // Check if already in catalog
+    const existing = findAnimeEpisode({
+        anilistId: meta.anilistId,
+        malId: meta.malId,
+        episode: ep,
+        track
+    });
+    if (existing) {
+        console.log(`⏩ [Skip] Episode ${ep} is already ingested! (Telegram Message #${existing.telegramMessageId})`);
+        return existing;
+    }
+
+    const workDir = path.resolve(`temp_ingest_${ep}_${Date.now()}`);
     fs.mkdirSync(workDir, { recursive: true });
 
     try {
-        // Step 1: Metadata
-        console.log("[1/5] Fetching anime metadata...");
-        const meta = await fetchAnimeMetadata(id, type);
-        console.log(`   Anime: "${meta.title}" | AniList: ${meta.anilistId} | MAL: ${meta.malId}`);
+        // Step 1: Stream Resolution
+        console.log(`[*] Resolving stream from MegaPlay for EP ${ep}...`);
+        const masterUrl = await fetchMegaPlayM3u8(meta.anilistId || meta.malId, ep, track, type);
 
-        // Step 2: Stream Resolution
-        console.log("\n[2/5] Resolving stream from MegaPlay...");
-        const masterUrl = await fetchMegaPlayM3u8(id, ep, track, type);
-
-        // Step 3: Download & Merge
-        console.log("\n[3/5] Downloading chunks & assembling MP4...");
+        // Step 2: Download & Concat
+        console.log(`[*] Downloading chunks & assembling clean MP4...`);
         const mp4Path = await downloadAndConcatHls(masterUrl, workDir, meta.title, ep);
         const stats = fs.statSync(mp4Path);
         const sizeMB = (stats.size / (1024 * 1024)).toFixed(2);
         console.log(`   Final File Size: ${sizeMB} MB`);
 
-        // Step 4: Upload to Telegram Channel via GramJS
-        console.log("\n[4/5] Uploading MP4 to Telegram channel via MTProto...");
-        const sessionString = fs.existsSync('.telegram_session.txt') 
-            ? fs.readFileSync('.telegram_session.txt', 'utf-8').trim() 
-            : '';
-        const client = new TelegramClient(new StringSession(sessionString), API_ID, API_HASH, {
-            connectionRetries: 5,
-        });
-        await client.start({ botAuthToken: BOT_TOKEN });
-        const channel = await client.getEntity(CHANNEL_ID);
-
+        // Step 3: Upload to Telegram with FloodWait Retry
+        const cleanFileName = `${meta.title} - EP${ep}.mp4`;
         const caption = `🎬 ${meta.title} - Episode ${ep} [1080p ${track.toUpperCase()}]\n` +
                         `━━━━━━━━━━━━━━━━━━━━\n` +
                         `📌 AniList ID: ${meta.anilistId} | MAL ID: ${meta.malId}\n` +
@@ -224,35 +231,49 @@ async function run() {
                         `#${meta.title.replace(/[^a-zA-Z0-9]/g, '')} #Episode${ep}`;
 
         console.log(`[*] Sending video file to Telegram channel ${CHANNEL_ID}...`);
-        const cleanFileName = `${meta.title} - EP${ep}.mp4`;
-        const sent = await client.sendFile(channel, {
-            file: mp4Path,
-            caption,
-            attributes: [
-                new Api.DocumentAttributeFilename({
-                    fileName: cleanFileName
-                }),
-                new Api.DocumentAttributeVideo({
-                    duration: 0,
-                    w: 1920,
-                    h: 1080,
+        let sent = null;
+        let attempts = 0;
+        while (!sent && attempts < 4) {
+            attempts++;
+            try {
+                sent = await client.sendFile(channel, {
+                    file: mp4Path,
+                    caption,
+                    attributes: [
+                        new Api.DocumentAttributeFilename({
+                            fileName: cleanFileName
+                        }),
+                        new Api.DocumentAttributeVideo({
+                            duration: 0,
+                            w: 1920,
+                            h: 1080,
+                            supportsStreaming: true
+                        })
+                    ],
+                    forceDocument: false,
                     supportsStreaming: true
-                })
-            ],
-            forceDocument: false,
-            supportsStreaming: true
-        });
-        console.log(`🎉 UPLOAD SUCCESS! Telegram Message ID: #${sent.id}`);
-        await client.disconnect();
+                });
+            } catch (uErr) {
+                if (uErr.errorMessage?.includes('FLOOD_WAIT') || uErr.seconds) {
+                    const waitSec = uErr.seconds || 30;
+                    console.warn(`⚠️ [FloodWait] Hit Telegram rate limit. Waiting ${waitSec + 2}s before retry...`);
+                    await new Promise(r => setTimeout(r, (waitSec + 2) * 1000));
+                } else {
+                    throw uErr;
+                }
+            }
+        }
 
-        // Also add to data/videos.json for raw channel listing
+        console.log(`🎉 UPLOAD SUCCESS! Telegram Message ID: #${sent.id}`);
+
+        // Update local videos.json
         try {
             const vDbPath = path.resolve('data/videos.json');
             let vDb = [];
             if (fs.existsSync(vDbPath)) vDb = JSON.parse(fs.readFileSync(vDbPath, 'utf-8'));
             vDb.unshift({
                 id: sent.id,
-                fileName: `${meta.title} - EP${ep}.mp4`,
+                fileName: cleanFileName,
                 sizeBytes: stats.size,
                 sizeMB,
                 mimeType: 'video/mp4',
@@ -264,8 +285,7 @@ async function run() {
             fs.writeFileSync(vDbPath, JSON.stringify(vDb, null, 2));
         } catch {}
 
-        // Step 5: Save to Catalog & Webhook
-        console.log("\n[5/5] Registering mapping in anime catalog...");
+        // Save to catalog
         const record = registerAnimeEpisode({
             anilistId: meta.anilistId,
             malId: meta.malId,
@@ -278,35 +298,80 @@ async function run() {
             poster: meta.poster
         });
 
-        // Optional VPS Webhook Notification
+        // Webhook
         if (VPS_CALLBACK_URL) {
-            console.log(`[*] Sending registration webhook to VPS: ${VPS_CALLBACK_URL}`);
             try {
                 await fetch(VPS_CALLBACK_URL, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(record)
                 });
-            } catch (wErr) {
-                console.warn("[Webhook Warning] VPS callback failed:", wErr.message);
-            }
+            } catch {}
         }
 
-        console.log("\n==================================================");
-        console.log("🏆 PIPELINE COMPLETED SUCCESSFULLY!");
-        console.log(`   Anime: ${meta.title} - EP ${ep}`);
-        console.log(`   Telegram Message ID: ${sent.id}`);
-        console.log(`   Stream URL: http://localhost:4015/stream/${sent.id}`);
-        console.log(`   Direct Anime Stream: http://localhost:4015/stream/ani/${meta.anilistId}/${ep}`);
-        console.log(`   Player URL: http://localhost:4015/player/ani/${meta.anilistId}/${ep}`);
-        console.log("==================================================");
+        console.log(`✅ [Done] EP ${ep} mapped -> Msg #${sent.id}`);
+        return record;
 
     } finally {
-        // Cleanup temp directory
         try {
             fs.rmSync(workDir, { recursive: true, force: true });
         } catch {}
     }
+}
+
+// 5. Main Batch Orchestrator
+async function run() {
+    const { id, type, startEp, endEp, track } = parseArgs();
+    console.log("==================================================");
+    console.log(`🚀 STARTING BULK ANIME INGESTION PIPELINE`);
+    console.log(`   Type: ${type.toUpperCase()} | ID: ${id}`);
+    console.log(`   Episodes: ${startEp} to ${endEp} (Total: ${endEp - startEp + 1}) | Track: ${track}`);
+    console.log("==================================================");
+
+    // Fetch Anime Metadata Once
+    console.log("[*] Resolving anime series metadata...");
+    const meta = await fetchAnimeMetadata(id, type);
+    console.log(`   Series: "${meta.title}" | AniList: ${meta.anilistId} | MAL: ${meta.malId} | Total EPs: ${meta.totalEpisodes}`);
+
+    // Connect Telegram Client Once for all episodes
+    console.log("[*] Initializing Telegram MTProto client...");
+    const sessionString = fs.existsSync('.telegram_session.txt') 
+        ? fs.readFileSync('.telegram_session.txt', 'utf-8').trim() 
+        : '';
+    const client = new TelegramClient(new StringSession(sessionString), API_ID, API_HASH, {
+        connectionRetries: 5,
+    });
+    await client.start({ botAuthToken: BOT_TOKEN });
+    const channel = await client.getEntity(CHANNEL_ID);
+    console.log(`✅ Connected to Telegram storage channel: "${channel.title || channel.id}"`);
+
+    let successCount = 0;
+    let failCount = 0;
+
+    try {
+        for (let ep = startEp; ep <= endEp; ep++) {
+            try {
+                await ingestSingleEpisode(meta, ep, track, type, client, channel);
+                successCount++;
+                if (ep < endEp) {
+                    console.log(`⏳ Waiting 3s before next episode...`);
+                    await new Promise(r => setTimeout(r, 3000));
+                }
+            } catch (err) {
+                console.error(`❌ Error ingesting Episode ${ep}:`, err.message);
+                failCount++;
+            }
+        }
+    } finally {
+        await client.disconnect();
+    }
+
+    console.log("\n==================================================");
+    console.log(`🏁 BULK INGESTION RUN FINISHED!`);
+    console.log(`   Successful: ${successCount}`);
+    console.log(`   Failed:     ${failCount}`);
+    console.log(`   Range:      EP ${startEp} to ${endEp}`);
+    console.log("==================================================");
 }
 
 run().catch(err => {

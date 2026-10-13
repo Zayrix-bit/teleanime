@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       id:
-        description: 'Anime AniList or MAL ID (e.g. 21, 151807, 166783)'
+        description: 'Anime AniList or MAL ID (e.g. 21 for One Piece)'
         required: true
-        default: '151807'
+        default: '21'
       type:
         description: 'ID Provider (ani or mal)'
         required: true
@@ -15,10 +15,14 @@ on:
         options:
           - ani
           - mal
-      episode:
-        description: 'Episode Number (e.g. 1, 2, 12)'
+      start_ep:
+        description: 'Start Episode Number (e.g. 1)'
         required: true
         default: '1'
+      end_ep:
+        description: 'End Episode Number (e.g. 10 or 25)'
+        required: true
+        default: '10'
       track:
         description: 'Audio Track (sub or dub)'
         required: true
@@ -31,19 +35,19 @@ on:
         description: 'MegaPlay Scraper API URL'
         required: false
         default: 'http://54.39.22.90:4004'
-      vps_catalog_webhook:
-        description: 'Telegram Streamer Callback URL (registers into anime_catalog.json)'
-        required: false
-        default: 'http://54.39.22.90:4015/api/catalog/register'
 
 jobs:
   ingest_and_upload:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 360
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout Code Repository
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Node.js Runtime
         uses: actions/setup-node@v4
@@ -66,15 +70,22 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || '8902447483:AAH-zDT_BUwV3WmuW9dvkdAVKWlHP4fJowI' }}
           TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID || '-1004305106563' }}
           MEGAPLAY_API: ${{ inputs.megaplay_api }}
-          VPS_CALLBACK_URL: ${{ inputs.vps_catalog_webhook }}
         run: |
           echo "=========================================================="
-          echo "🚀 STARTING HIGH-SPEED INGESTION RUNNER"
-          echo "Target Anime: ${{ inputs.type }}:${{ inputs.id }} Ep:${{ inputs.episode }} [${{ inputs.track }}]"
+          echo "🚀 STARTING BULK INGESTION RUNNER"
+          echo "Target Anime: ${{ inputs.type }}:${{ inputs.id }} EPs:${{ inputs.start_ep }} to ${{ inputs.end_ep }} [${{ inputs.track }}]"
           echo "=========================================================="
-          node ingest.js --id ${{ inputs.id }} --type ${{ inputs.type }} --ep ${{ inputs.episode }} --track ${{ inputs.track }}
+          node ingest.js --id ${{ inputs.id }} --type ${{ inputs.type }} --start-ep ${{ inputs.start_ep }} --end-ep ${{ inputs.end_ep }} --track ${{ inputs.track }}
+
+      - name: Auto-Commit Catalog Mapping to Repository
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/
+          git commit -m "chore(catalog): auto-sync episodes ${{ inputs.start_ep }}-${{ inputs.end_ep }} for anime ${{ inputs.id }}" || echo "No changes to commit"
+          git push origin main || echo "Push skipped or already up to date"
 
       - name: Pipeline Completed Summary
         run: |
-          echo "🎉 Episode successfully ingested, merged, and uploaded to Telegram Storage Channel!"
-          echo "Mapping record sent to catalog webhook."
+          echo "🎉 Episode batch successfully ingested, merged, and uploaded to Telegram Storage Channel!"
+          echo "Catalog automatically updated in repository."
