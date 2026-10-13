@@ -13,7 +13,8 @@ export function renderPlayerHtml({
     track, 
     poster, 
     anilistId, 
-    malId 
+    malId,
+    subtitles = []
 }) {
     const displayTitle = title 
         ? `${title} · Episode ${episode} [${(track || 'sub').toUpperCase()}]`
@@ -177,6 +178,15 @@ export function renderPlayerHtml({
         .copy-toast.show {
             transform: translateX(-50%) translateY(0);
         }
+        ::cue {
+            background: rgba(0, 0, 0, 0.8);
+            color: #fff;
+            font-size: 15px;
+            font-weight: 600;
+            text-shadow: 0 1px 3px rgba(0,0,0,0.9);
+            border-radius: 4px;
+            padding: 3px 8px;
+        }
     </style>
 </head>
 <body>
@@ -199,6 +209,7 @@ export function renderPlayerHtml({
         <div class="video-container">
             <video controls autoplay playsinline preload="metadata">
                 <source src="${streamUrl}" type="video/mp4">
+                ${subtitles.map(s => `<track kind="captions" label="${s.label || 'English'}" src="${s.url}" default>`).join('\n                ')}
                 Your browser does not support HTML5 video streaming.
             </video>
         </div>

@@ -116,7 +116,8 @@ app.get('/player/ani/:id/:ep/:track?', async (req, res) => {
         track: item.track,
         poster: item.poster,
         anilistId: item.anilistId,
-        malId: item.malId
+        malId: item.malId,
+        subtitles: item.subtitles || []
     }));
 });
 
@@ -140,7 +141,8 @@ app.get('/player/mal/:id/:ep/:track?', async (req, res) => {
         track: item.track,
         poster: item.poster,
         anilistId: item.anilistId,
-        malId: item.malId
+        malId: item.malId,
+        subtitles: item.subtitles || []
     }));
 });
 

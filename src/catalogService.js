@@ -49,7 +49,8 @@ export function registerAnimeEpisode({
     resolution = "1080p",
     sizeBytes = 0,
     durationSec = 0,
-    poster = ""
+    poster = "",
+    subtitles = []
 }) {
     const catalog = loadCatalog();
     const epNum = parseInt(episode, 10) || 1;
@@ -79,6 +80,7 @@ export function registerAnimeEpisode({
         sizeMB: (sizeBytes / (1024 * 1024)).toFixed(2),
         durationSec,
         poster,
+        subtitles,
         uploadedAt: new Date().toISOString()
     };
 

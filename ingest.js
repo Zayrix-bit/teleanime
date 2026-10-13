@@ -92,7 +92,7 @@ async function fetchAnimeMetadata(id, type = 'ani') {
     };
 }
 
-// 2. Fetch Master M3U8 from MegaPlay
+// 2. Fetch Master M3U8 from MegaPlay with Subtitles
 async function fetchMegaPlayM3u8(id, ep, track, type) {
     const apiUrl = `${MEGAPLAY_API}/api/stream?id=${id}&ep=${ep}&track=${track}&type=${type}`;
     console.log(`[*] Requesting stream from MegaPlay API: ${apiUrl}`);
@@ -101,11 +101,14 @@ async function fetchMegaPlayM3u8(id, ep, track, type) {
     if (!data.success || !data.stream_url) {
         throw new Error(`MegaPlay stream resolution failed: ${data.error || 'No stream_url'}`);
     }
-    return data.stream_url;
+    return {
+        streamUrl: data.stream_url,
+        subtitles: data.subtitles || []
+    };
 }
 
-// 3. Download & Unmask Chunks in Parallel
-async function downloadAndConcatHls(masterUrl, outputDir, title, ep) {
+// 3. Download & Unmask Chunks in Parallel + Subtitle Embedding
+async function downloadAndConcatHls(masterUrl, outputDir, title, ep, subtitles = []) {
     console.log(`[*] Fetching Master M3U8: ${masterUrl}`);
     const masterRes = await fetch(masterUrl, {
         headers: { "Referer": "https://megaplay.buzz/", "Origin": "https://megaplay.buzz", "User-Agent": "Mozilla/5.0" }
@@ -171,20 +174,48 @@ async function downloadAndConcatHls(masterUrl, outputDir, title, ep) {
     await Promise.all(workers);
     console.log("\n✅ All segments downloaded & unmasked!");
 
-    // 4. Generate FFmpeg concat list
+    // Download Subtitle Track if available
+    let vttPath = null;
+    const subObj = subtitles.find(s => s.label?.toLowerCase().includes('eng')) || subtitles[0];
+    if (subObj?.url) {
+        try {
+            console.log(`[*] Downloading subtitle track (${subObj.label || 'English'})...`);
+            const subRes = await fetch(subObj.url, {
+                headers: { "Referer": "https://megaplay.buzz/", "User-Agent": "Mozilla/5.0" }
+            });
+            if (subRes.ok) {
+                const vttText = await subRes.text();
+                if (vttText && vttText.includes('WEBVTT')) {
+                    vttPath = path.join(outputDir, 'subtitles.vtt');
+                    fs.writeFileSync(vttPath, vttText, 'utf-8');
+                    console.log(`✅ Subtitles downloaded & verified (${(vttText.length / 1024).toFixed(1)} KB)`);
+                }
+            }
+        } catch (subErr) {
+            console.warn(`[Sub Warning] Failed to download subtitles:`, subErr.message);
+        }
+    }
+
+    // Generate FFmpeg concat list
     const concatListPath = path.join(outputDir, 'concat_list.txt');
     const listContent = downloadedFiles.map(f => `file '${f.replace(/\\/g, '/')}'`).join('\n');
     fs.writeFileSync(concatListPath, listContent);
 
-    // 5. Fast FFmpeg concat without re-encoding (-c copy)
+    // Fast FFmpeg concat without re-encoding (-c copy) + Subtitle embedding
     const sanitizedTitle = title.replace(/[^a-zA-Z0-9_\-]/g, '_');
     const finalMp4Path = path.join(outputDir, `${sanitizedTitle}_EP${ep}_1080p.mp4`);
     console.log(`[*] Merging into clean MP4 with FFmpeg: ${finalMp4Path}`);
 
-    const cmd = `ffmpeg -y -f concat -safe 0 -i "${concatListPath}" -c copy -movflags +faststart "${finalMp4Path}"`;
+    let cmd;
+    if (vttPath) {
+        console.log(`[*] Embedding soft subtitle track into MP4 container (-c:s mov_text)...`);
+        cmd = `ffmpeg -y -f concat -safe 0 -i "${concatListPath}" -i "${vttPath}" -c:v copy -c:a copy -c:s mov_text -metadata:s:s:0 language=eng -movflags +faststart "${finalMp4Path}"`;
+    } else {
+        cmd = `ffmpeg -y -f concat -safe 0 -i "${concatListPath}" -c copy -movflags +faststart "${finalMp4Path}"`;
+    }
     execSync(cmd, { stdio: 'ignore' });
 
-    console.log("✅ MP4 Merged Successfully!");
+    console.log("✅ MP4 Merged with Subtitles Successfully!");
     return finalMp4Path;
 }
 
@@ -210,13 +241,13 @@ async function ingestSingleEpisode(meta, ep, track, type, client, channel) {
     fs.mkdirSync(workDir, { recursive: true });
 
     try {
-        // Step 1: Stream Resolution
+        // Step 1: Stream Resolution & Subtitle Metadata
         console.log(`[*] Resolving stream from MegaPlay for EP ${ep}...`);
-        const masterUrl = await fetchMegaPlayM3u8(meta.anilistId || meta.malId, ep, track, type);
+        const { streamUrl, subtitles } = await fetchMegaPlayM3u8(meta.anilistId || meta.malId, ep, track, type);
 
-        // Step 2: Download & Concat
+        // Step 2: Download & Concat with Subtitles
         console.log(`[*] Downloading chunks & assembling clean MP4...`);
-        const mp4Path = await downloadAndConcatHls(masterUrl, workDir, meta.title, ep);
+        const mp4Path = await downloadAndConcatHls(streamUrl, workDir, meta.title, ep, subtitles);
         const stats = fs.statSync(mp4Path);
         const sizeMB = (stats.size / (1024 * 1024)).toFixed(2);
         console.log(`   Final File Size: ${sizeMB} MB`);
@@ -295,7 +326,8 @@ async function ingestSingleEpisode(meta, ep, track, type, client, channel) {
             telegramMessageId: sent.id,
             resolution: "1080p",
             sizeBytes: stats.size,
-            poster: meta.poster
+            poster: meta.poster,
+            subtitles
         });
 
         // Webhook
