@@ -1,5 +1,23 @@
 [
   {
+    "key": "ani:101280:1:hindi",
+    "title": "That Time I Got Reincarnated as a Slime",
+    "anilistId": 101280,
+    "malId": 37430,
+    "episode": 1,
+    "track": "hindi",
+    "telegramMessageId": 51,
+    "streamUrl": "/stream/51",
+    "playerUrl": "/player/51",
+    "resolution": "1080p",
+    "sizeBytes": 1681360478,
+    "sizeMB": "1603.47",
+    "durationSec": 1420,
+    "poster": "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx101280-55ptHQGkhZOx.jpg",
+    "subtitles": [],
+    "uploadedAt": "2026-10-14T14:58:14.664Z"
+  },
+  {
     "key": "ani:21:38:sub",
     "title": "ONE PIECE",
     "anilistId": 21,
