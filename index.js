@@ -23,6 +23,7 @@ import { scrapeStream } from './src/scraper.js';
 import { convertStreamToMp4, probeVideo } from './src/converter.js';
 import { uploadVideo, closeTelegram } from './src/telegram.js';
 import { searchAnime, getAnimeEpisodes, getCatalog, getCompletedHindiList } from './src/desidubScraper.js';
+import { markEpisodeUploaded, getVpsHindiAnimeList, getVpsHindiEpisodes } from './src/vpsTracker.js';
 
 dotenv.config();
 
@@ -67,6 +68,8 @@ function parseArgs() {
         else if (arg === '--caption' || arg === '-c') opts.caption = args[++i];
         else if (arg === '--channel') opts.channel = args[++i];
         else if (arg === '--keep-local') opts.keepLocal = true;
+        else if (arg === '--tracker') opts.tracker = true;
+        else if (arg === '--tracker-episodes') opts.trackerEpisodes = args[++i];
     }
 
     return opts;
@@ -85,6 +88,34 @@ async function main() {
             console.log(`      EPs: ${item.episodes} | Romaji: "${item.romaji}"`);
         });
         console.log(`\n💡 To upload full season: node index.js --anime "${list[0]?.title}" --start-ep 1 --end-ep ${list[0]?.episodes}`);
+        return;
+    }
+
+    // 2. UTILITY: LIVE VPS ANILIST & ANIZIP TRACKER
+    if (opts.tracker) {
+        console.log(`\n🌐 FETCHING LIVE CLOUD TRACKER (https://db.anixo.buzz)...`);
+        const vpsList = await getVpsHindiAnimeList({ year: opts.year });
+        console.log(`Found ${vpsList.length} anime mapped in VPS Database:\n`);
+        vpsList.forEach((item, idx) => {
+            const statusIcon = item.status === 'Completed' ? '✅' : (item.uploaded_episodes > 0 ? '⏳' : '⚪');
+            console.log(` [${String(idx + 1).padStart(2, '0')}] ${statusIcon} ${item.title_english} (${item.season}) [${item.year}]`);
+            console.log(`      Progress: ${item.uploaded_episodes}/${item.total_episodes} EPs (${item.progress_pct}%) | Status: ${item.status}`);
+            console.log(`      AniList: ${item.anilist_id || 'N/A'} | TVDB: ${item.thetvdb_id || 'N/A'} | MAL: ${item.mal_id || 'N/A'}`);
+        });
+        return;
+    }
+
+    if (opts.trackerEpisodes) {
+        console.log(`\n📋 Fetching VPS Episode Mapping for: "${opts.trackerEpisodes}"...`);
+        const eps = await getVpsHindiEpisodes({ search: opts.trackerEpisodes });
+        console.log(`Found ${eps.length} mapped episode(s):\n`);
+        eps.forEach(e => {
+            const icon = e.is_uploaded ? '✅' : '⚪';
+            console.log(`  ${icon} EP ${e.episode_number}: "${e.episode_title}" [Abs: ${e.absolute_episode_number}]`);
+            if (e.is_uploaded) {
+                console.log(`     TG Msg ID: ${e.telegram_message_id} | Size: ${(e.file_size_bytes / (1024 * 1024)).toFixed(1)} MB | Uploaded: ${new Date(e.uploaded_at * 1000).toLocaleString()}`);
+            }
+        });
         return;
     }
 
@@ -218,6 +249,21 @@ Options:
 
                 console.log(`✅ [Episode ${currentEp}/${endEp}] Uploaded successfully! Msg ID: ${uploadResult.messageId}`);
                 console.log(`   Link: ${uploadResult.directLink}`);
+
+                // STEP 5: SYNC TO VPS ANILIST & ANIZIP DATABASE
+                try {
+                    await markEpisodeUploaded({
+                        title: opts.anime || opts.title,
+                        episodeNumber: currentEp,
+                        telegramMessageId: uploadResult.messageId,
+                        telegramChannelId: String(uploadResult.channelId),
+                        fileSizeBytes: uploadResult.sizeBytes,
+                        durationSeconds: Math.round(meta.duration),
+                        serverUsed: opts.server || 'vidmoly'
+                    });
+                } catch (vpsErr) {
+                    console.warn(`⚠️ [VPS Tracker Sync]:`, vpsErr.message);
+                }
 
             } catch (epErr) {
                 console.error(`❌ [Episode ${currentEp}/${endEp}] Error:`, epErr.message);

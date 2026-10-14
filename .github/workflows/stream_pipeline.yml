@@ -10,15 +10,24 @@ on:
         type: choice
         options:
           - desidub_anime
+          - anime_batch
           - direct_url
       anime:
-        description: 'Anime Name or Slug (for desidub_anime mode, e.g. slime or solo leveling)'
+        description: 'Anime Name or Slug (e.g. "My Dress-Up Darling", "Solo Leveling")'
         required: false
-        default: 'slime'
+        default: 'My Dress-Up Darling'
       episode:
-        description: 'Episode Number (e.g. 1, 20)'
+        description: 'Episode Number (for single episode)'
         required: false
         default: '1'
+      start_episode:
+        description: 'Start Episode (for anime_batch mode)'
+        required: false
+        default: '1'
+      end_episode:
+        description: 'End Episode (for anime_batch mode)'
+        required: false
+        default: '12'
       server:
         description: 'Preferred Player / Server'
         required: false
@@ -70,13 +79,17 @@ jobs:
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH || 'f52eaaae40fbc572fcf046c82f620054' }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || '8902447483:AAH-zDT_BUwV3WmuW9dvkdAVKWlHP4fJowI' }}
           TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID || '-1004305106563' }}
+          VPS_TRACKER_URL: 'https://db.anixo.buzz'
         run: |
           echo "=========================================================="
           echo "🚀 STARTING DESIDUBANIME INGESTION PIPELINE"
           echo "Mode: ${{ inputs.mode }}"
           echo "=========================================================="
 
-          if [ "${{ inputs.mode }}" = "desidub_anime" ]; then
+          if [ "${{ inputs.mode }}" = "anime_batch" ]; then
+            echo "Batch Ingest: ${{ inputs.anime }} | Episodes: ${{ inputs.start_episode }} to ${{ inputs.end_episode }}"
+            ARGS="--anime \"${{ inputs.anime }}\" --start-ep \"${{ inputs.start_episode }}\" --end-ep \"${{ inputs.end_episode }}\""
+          elif [ "${{ inputs.mode }}" = "desidub_anime" ]; then
             echo "Target Anime: ${{ inputs.anime }} | Episode: ${{ inputs.episode }}"
             ARGS="--anime \"${{ inputs.anime }}\" --ep \"${{ inputs.episode }}\""
           else

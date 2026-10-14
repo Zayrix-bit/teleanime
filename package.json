@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "dotenv": "^16.4.5",
+    "ssh2": "^1.17.0",
     "telegram": "^2.22.2"
   }
 }
