@@ -1,0 +1,85 @@
+name: 🚀 Cloud Stream Scraper & Telegram Ingestion
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Target Page URL or Direct Stream Link (.m3u8 / .mp4 / .ts)'
+        required: true
+        default: ''
+      title:
+        description: 'Video Title or Episode Name (e.g. My Anime Episode 01)'
+        required: true
+        default: 'Stream Video'
+      site:
+        description: 'Scraper Site Module (leave empty for generic stream URL)'
+        required: false
+        default: ''
+      ep:
+        description: 'Episode Number (optional, e.g. 1)'
+        required: false
+        default: ''
+      caption:
+        description: 'Custom Telegram Caption (optional)'
+        required: false
+        default: ''
+
+jobs:
+  scrape_convert_upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      contents: read
+
+    steps:
+      - name: 📦 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js Runtime (v20)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: 🎬 Install FFmpeg & Media Tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+
+      - name: 📥 Install Dependencies
+        run: npm ci || npm install
+
+      - name: 🚀 Execute Scraper, FFmpeg Remux & Telegram Upload
+        env:
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID || '38731827' }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH || 'f52eaaae40fbc572fcf046c82f620054' }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || '8902447483:AAH-zDT_BUwV3WmuW9dvkdAVKWlHP4fJowI' }}
+          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID || '-1004305106563' }}
+        run: |
+          echo "=========================================================="
+          echo "🚀 STARTING CLOUD SCRAPER PIPELINE"
+          echo "Target Title: ${{ inputs.title }}"
+          echo "Input URL: ${{ inputs.url }}"
+          echo "=========================================================="
+
+          # Build argument string
+          ARGS="--url \"${{ inputs.url }}\" --title \"${{ inputs.title }}\""
+
+          if [ -n "${{ inputs.site }}" ]; then
+            ARGS="$ARGS --site \"${{ inputs.site }}\""
+          fi
+
+          if [ -n "${{ inputs.ep }}" ]; then
+            ARGS="$ARGS --ep \"${{ inputs.ep }}\""
+          fi
+
+          if [ -n "${{ inputs.caption }}" ]; then
+            ARGS="$ARGS --caption \"${{ inputs.caption }}\""
+          fi
+
+          eval node index.js $ARGS
+
+      - name: 🎉 Completion Summary
+        if: success()
+        run: |
+          echo "🎉 Stream successfully scraped, converted to MP4, and uploaded to Telegram!"

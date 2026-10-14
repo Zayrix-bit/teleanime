@@ -1,21 +1,15 @@
 {
   "name": "telegram-streamer",
-  "version": "1.0.0",
-  "description": "High-Performance Telegram Video Storage & HTTP Streaming Gateway",
+  "version": "2.0.0",
+  "description": "Cloud Stream Scraper, TS/M3U8 to MP4 Converter & Telegram MTProto Uploader",
   "type": "module",
-  "main": "server.js",
+  "main": "index.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "nodemon server.js",
-    "sync-catalog": "node sync_catalog.js",
-    "ingest-hindi": "node ingest_hindi.js",
-    "watch-hindi": "node ingest_hindi.js --watch hindi_queue"
+    "start": "node index.js",
+    "scrape": "node index.js"
   },
   "dependencies": {
-    "cors": "^2.8.5",
     "dotenv": "^16.4.5",
-    "express": "^4.19.2",
-    "multer": "^1.4.5-lts.1",
     "telegram": "^2.22.2"
   }
 }
