@@ -157,15 +157,18 @@ function parseFileDetails(filePath) {
         ep = parseInt(standaloneMatch[1], 10);
     }
 
-    // Clean Title extraction
-    let title = baseName
+    // Clean Title extraction: take the prefix before season/episode tags
+    let rawTitle = baseName;
+    const prefixMatch = baseName.match(/^(.*?)(?:\s*S\d+E\d+|\s*EP\d+|\s*Episode\s*\d+|\s*-\s*\d{1,3}(?:\s*\[|\s*\(|\s*$))/i);
+    if (prefixMatch && prefixMatch[1].trim().length > 2) {
+        rawTitle = prefixMatch[1];
+    }
+
+    let title = rawTitle
         .replace(/\[[^\]]*\]/g, '')
         .replace(/\([^\)]*\)/g, '')
-        .replace(/S\d+E\d+/i, '')
-        .replace(/(?:EP|Episode)[\s._-]*\d+/i, '')
         .replace(/\b(1080p|720p|480p|x264|x265|hevc|web-dl|bluray|esub|hindi|dub|multi|audio|dual)\b/gi, '')
         .replace(/[-_.]/g, ' ')
-        .replace(/\b\d{1,3}\s*$/, '')
         .replace(/\s+/g, ' ')
         .trim();
 
@@ -238,12 +241,21 @@ export async function processHindiVideoFile(filePath, channel, options = {}) {
 
         let sent = null;
         let attempts = 0;
+        let lastPercentLogged = -1;
         while (!sent && attempts < 4) {
             attempts++;
             try {
                 sent = await client.sendFile(channel, {
                     file: uploadPath,
                     caption,
+                    workers: 4,
+                    progressCallback: (progress) => {
+                        const pct = Math.floor(progress * 100);
+                        if (pct % 15 === 0 && pct !== lastPercentLogged) {
+                            lastPercentLogged = pct;
+                            console.log(`⏳ [Upload Progress] ${pct}% (${((progress * stats.size) / (1024 * 1024)).toFixed(1)} / ${sizeMB} MB)`);
+                        }
+                    },
                     attributes: [
                         new Api.DocumentAttributeFilename({ fileName: cleanFileName }),
                         new Api.DocumentAttributeVideo({

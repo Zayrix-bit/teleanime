@@ -32,6 +32,10 @@ on:
         description: 'AniList ID (optional, e.g. 101280)'
         required: false
         default: ''
+      proxy:
+        description: 'Indian HTTP/SOCKS5 Proxy (optional, e.g. http://ip:port)'
+        required: false
+        default: ''
 
 jobs:
   crunchyroll_cloud_pipeline:
@@ -95,6 +99,14 @@ jobs:
           TOKEN="${{ inputs.etp_rt }}"
           if [ -z "$TOKEN" ]; then
             TOKEN="$CR_ETP_RT"
+          fi
+          
+          if [ -n "${{ inputs.proxy }}" ]; then
+            echo "🌐 Configuring Indian Proxy: ${{ inputs.proxy }}"
+            export HTTP_PROXY="${{ inputs.proxy }}"
+            export HTTPS_PROXY="${{ inputs.proxy }}"
+            export http_proxy="${{ inputs.proxy }}"
+            export https_proxy="${{ inputs.proxy }}"
           fi
           
           EXTRA_ARGS=()
