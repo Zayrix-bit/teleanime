@@ -2,11 +2,12 @@
  * STREAM DOWNLOADER & FFMPEG CONVERTER ENGINE
  * - Downloads M3U8 HLS playlists & TS chunks
  * - Lossless Remuxing (-c copy) -> Clean MP4 in seconds with zero CPU waste
+ * - Maps video & all audio tracks (Hindi, English, etc.)
  * - Injects '+faststart' movflag for immediate Telegram in-app streaming
  * - Probes video metadata (duration, width, height) via ffprobe
  */
 
-import { exec, execSync } from 'child_process';
+import { exec } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
@@ -48,12 +49,14 @@ export async function convertStreamToMp4({ streamUrl, outputPath, headers = {} }
 
     const headerArg = headerStr ? `-headers "${headerStr.replace(/"/g, '\\"')}"` : '';
 
-    // Primary command: Lossless stream copy (-c copy) + faststart
+    // Primary command: Lossless stream copy (-c copy) with all audio tracks + faststart
     const ffmpegCmd = [
         'ffmpeg -y -hide_banner -loglevel info',
         '-protocol_whitelist "file,http,https,tcp,tls,crypto,data"',
         headerArg,
         `-i "${streamUrl}"`,
+        '-map 0:v:0',
+        '-map 0:a?',
         '-c copy',
         '-bsf:a aac_adtstoasc',
         '-movflags +faststart',
@@ -73,6 +76,8 @@ export async function convertStreamToMp4({ streamUrl, outputPath, headers = {} }
             '-protocol_whitelist "file,http,https,tcp,tls,crypto,data"',
             headerArg,
             `-i "${streamUrl}"`,
+            '-map 0:v:0',
+            '-map 0:a?',
             '-c:v copy -c:a aac -b:a 128k',
             '-movflags +faststart',
             `"${outputPath}"`

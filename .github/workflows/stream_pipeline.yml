@@ -1,22 +1,36 @@
-name: 🚀 Cloud Stream Scraper & Telegram Ingestion
+name: 🚀 DesiDubAnime & Stream Ingestion Pipeline
 
 on:
   workflow_dispatch:
     inputs:
-      url:
-        description: 'Target Page URL or Direct Stream Link (.m3u8 / .mp4 / .ts)'
+      mode:
+        description: 'Ingestion Mode'
         required: true
-        default: ''
-      title:
-        description: 'Video Title or Episode Name (e.g. My Anime Episode 01)'
-        required: true
-        default: 'Stream Video'
-      site:
-        description: 'Scraper Site Module (leave empty for generic stream URL)'
+        default: 'desidub_anime'
+        type: choice
+        options:
+          - desidub_anime
+          - direct_url
+      anime:
+        description: 'Anime Name or Slug (for desidub_anime mode, e.g. slime or solo leveling)'
         required: false
-        default: ''
-      ep:
-        description: 'Episode Number (optional, e.g. 1)'
+        default: 'slime'
+      episode:
+        description: 'Episode Number (e.g. 1, 20)'
+        required: false
+        default: '1'
+      server:
+        description: 'Preferred Player / Server'
+        required: false
+        default: 'vidmoly'
+        type: choice
+        options:
+          - vidmoly
+          - mirror
+          - abyss
+          - p2p
+      direct_url:
+        description: 'Direct Watch Link or Stream URL (for direct_url mode)'
         required: false
         default: ''
       caption:
@@ -26,6 +40,7 @@ on:
 
 jobs:
   scrape_convert_upload:
+    name: Scrape, Convert & Upload
     runs-on: ubuntu-latest
     timeout-minutes: 360
     permissions:
@@ -49,7 +64,7 @@ jobs:
       - name: 📥 Install Dependencies
         run: npm ci || npm install
 
-      - name: 🚀 Execute Scraper, FFmpeg Remux & Telegram Upload
+      - name: 🚀 Execute Scraper Pipeline & Upload to Telegram
         env:
           TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID || '38731827' }}
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH || 'f52eaaae40fbc572fcf046c82f620054' }}
@@ -57,20 +72,20 @@ jobs:
           TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID || '-1004305106563' }}
         run: |
           echo "=========================================================="
-          echo "🚀 STARTING CLOUD SCRAPER PIPELINE"
-          echo "Target Title: ${{ inputs.title }}"
-          echo "Input URL: ${{ inputs.url }}"
+          echo "🚀 STARTING DESIDUBANIME INGESTION PIPELINE"
+          echo "Mode: ${{ inputs.mode }}"
           echo "=========================================================="
 
-          # Build argument string
-          ARGS="--url \"${{ inputs.url }}\" --title \"${{ inputs.title }}\""
-
-          if [ -n "${{ inputs.site }}" ]; then
-            ARGS="$ARGS --site \"${{ inputs.site }}\""
+          if [ "${{ inputs.mode }}" = "desidub_anime" ]; then
+            echo "Target Anime: ${{ inputs.anime }} | Episode: ${{ inputs.episode }}"
+            ARGS="--anime \"${{ inputs.anime }}\" --ep \"${{ inputs.episode }}\""
+          else
+            echo "Direct URL: ${{ inputs.direct_url }}"
+            ARGS="--url \"${{ inputs.direct_url }}\""
           fi
 
-          if [ -n "${{ inputs.ep }}" ]; then
-            ARGS="$ARGS --ep \"${{ inputs.ep }}\""
+          if [ -n "${{ inputs.server }}" ]; then
+            ARGS="$ARGS --server \"${{ inputs.server }}\""
           fi
 
           if [ -n "${{ inputs.caption }}" ]; then
@@ -82,4 +97,4 @@ jobs:
       - name: 🎉 Completion Summary
         if: success()
         run: |
-          echo "🎉 Stream successfully scraped, converted to MP4, and uploaded to Telegram!"
+          echo "🎉 Stream successfully scraped, converted to MP4 with faststart, and uploaded to Telegram!"
