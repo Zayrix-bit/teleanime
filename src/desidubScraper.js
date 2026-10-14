@@ -63,12 +63,26 @@ export async function searchAnime(query) {
             if (res.ok) {
                 const data = await res.json();
                 if (data && data.length > 0) {
-                    return data.map(item => ({
+                    const mapped = data.map(item => ({
                         id: item.id,
                         title: item.title?.rendered?.replace(/&#(\d+);/g, (_, c) => String.fromCharCode(c)).trim() || '',
                         slug: item.slug,
                         link: item.link
                     }));
+
+                    // Smart sort: if query does not specify Season 2, prioritize Season 1
+                    const isSeason2Query = /season\s*2|sea\s*2|\b2nd\b/i.test(q);
+                    mapped.sort((a, b) => {
+                        const aS2 = /season\s*2|sea\s*2|\b2nd\b/i.test(a.title) || a.slug.includes('-2') || a.slug.includes('sea-2');
+                        const bS2 = /season\s*2|sea\s*2|\b2nd\b/i.test(b.title) || b.slug.includes('-2') || b.slug.includes('sea-2');
+                        if (!isSeason2Query) {
+                            if (aS2 && !bS2) return 1;
+                            if (!aS2 && bS2) return -1;
+                        }
+                        return 0;
+                    });
+
+                    return mapped;
                 }
             }
         } catch {}
@@ -208,8 +222,14 @@ export async function getAnimeEpisodes(animeSlugOrUrl) {
  * Extracts Master M3U8 with Hindi, English, and Japanese multi-track audio.
  */
 export async function extractVidMolyStream(embedUrl) {
-    console.log(`[*] Resolving VidMoly Stream: ${embedUrl}...`);
-    const res = await fetch(embedUrl, {
+    let cleanUrl = embedUrl;
+    const srcMatch = cleanUrl.match(/src=['"]([^'"]+)['"]/i);
+    if (srcMatch) cleanUrl = srcMatch[1];
+    if (cleanUrl.includes('vidmoly.net')) {
+        cleanUrl = cleanUrl.replace('vidmoly.net', 'vidmoly.org').replace('http://', 'https://');
+    }
+    console.log(`[*] Resolving VidMoly Stream: ${cleanUrl}...`);
+    const res = await fetch(cleanUrl, {
         headers: {
             'User-Agent': USER_AGENT,
             'Referer': BASE_URL
@@ -393,7 +413,12 @@ export async function extractEpisodeStream(watchUrl, preferredServer = 'vidmoly'
         if (parts.length === 2) {
             try {
                 const name = Buffer.from(parts[0], 'base64').toString('utf-8');
-                const embedUrl = Buffer.from(parts[1], 'base64').toString('utf-8');
+                let embedUrl = Buffer.from(parts[1], 'base64').toString('utf-8');
+                const srcMatch = embedUrl.match(/src=['"]([^'"]+)['"]/i);
+                if (srcMatch) embedUrl = srcMatch[1];
+                if (embedUrl.includes('vidmoly.net')) {
+                    embedUrl = embedUrl.replace('vidmoly.net', 'vidmoly.org').replace('http://', 'https://');
+                }
                 servers.push({ name, embedUrl });
             } catch {}
         }
@@ -401,7 +426,11 @@ export async function extractEpisodeStream(watchUrl, preferredServer = 'vidmoly'
 
     const iframeMatch = html.match(/<iframe[^>]+src=['"]([^'"]+)['"]/i);
     if (iframeMatch && !servers.some(s => s.embedUrl === iframeMatch[1])) {
-        servers.unshift({ name: 'DefaultEmbed', embedUrl: iframeMatch[1] });
+        let defaultUrl = iframeMatch[1];
+        if (defaultUrl.includes('vidmoly.net')) {
+            defaultUrl = defaultUrl.replace('vidmoly.net', 'vidmoly.org').replace('http://', 'https://');
+        }
+        servers.unshift({ name: 'DefaultEmbed', embedUrl: defaultUrl });
     }
 
     console.log(`[*] Detected ${servers.length} server(s) on watch page:`);
