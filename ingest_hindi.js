@@ -81,13 +81,50 @@ async function resolveAnimeMeta(rawTitle) {
         console.warn(`[AniList Warning] ${err.message}`);
     }
 
-    return {
-        anilistId: null,
-        malId: null,
-        title: cleanSearch,
-        poster: '',
-        totalEpisodes: 0
-    };
+// 1b. Search AniList GraphQL API by explicit ID
+async function resolveAnimeById(id) {
+    console.log(`[*] Querying AniList GraphQL for ID: #${id}...`);
+    const query = `
+        query ($id: Int) {
+            Media(id: $id, type: ANIME) {
+                id
+                idMal
+                title {
+                    english
+                    romaji
+                }
+                coverImage {
+                    large
+                }
+                episodes
+            }
+        }
+    `;
+
+    try {
+        const res = await fetch('https://graphql.anilist.co', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query, variables: { id: parseInt(id, 10) } })
+        });
+        const data = await res.json();
+        const media = data.data?.Media;
+
+        if (media) {
+            const title = media.title.english || media.title.romaji || `Anime #${id}`;
+            return {
+                anilistId: media.id,
+                malId: media.idMal,
+                title,
+                poster: media.coverImage?.large || '',
+                totalEpisodes: media.episodes || 0
+            };
+        }
+    } catch (err) {
+        console.warn(`[AniList Warning] ${err.message}`);
+    }
+
+    return null;
 }
 
 // 2. Parse Filename into Title and Episode number
@@ -127,7 +164,7 @@ function parseFileDetails(filePath) {
 }
 
 // 3. Process & Upload Single Hindi Dub Video File
-export async function processHindiVideoFile(filePath, channel) {
+export async function processHindiVideoFile(filePath, channel, options = {}) {
     console.log(`\n==================================================`);
     console.log(`🇮🇳 PROCESSING HINDI DUB FILE: ${path.basename(filePath)}`);
     console.log(`==================================================`);
@@ -136,8 +173,16 @@ export async function processHindiVideoFile(filePath, channel) {
         throw new Error(`File does not exist: ${filePath}`);
     }
 
-    const { title: guessedTitle, episode } = parseFileDetails(filePath);
-    const meta = await resolveAnimeMeta(guessedTitle);
+    const { title: guessedTitle, episode: parsedEp } = parseFileDetails(filePath);
+    const episode = options.episode || parsedEp;
+
+    let meta = null;
+    if (options.anilistId) {
+        meta = await resolveAnimeById(options.anilistId);
+    }
+    if (!meta) {
+        meta = await resolveAnimeMeta(guessedTitle);
+    }
 
     console.log(`   Anime:   "${meta.title}"`);
     console.log(`   Episode: ${episode} [HINDI DUB]`);
@@ -241,17 +286,34 @@ export async function processHindiVideoFile(filePath, channel) {
     }
 }
 
+// Helper: Scan folder recursively for video files
+function findVideoFilesRecursive(dir) {
+    let results = [];
+    if (!fs.existsSync(dir)) return results;
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+            results = results.concat(findVideoFilesRecursive(fullPath));
+        } else if (/\.(mp4|mkv|ts|mov)$/i.test(entry.name)) {
+            results.push(fullPath);
+        }
+    }
+    return results;
+}
+
 // 4. Batch Folder Ingest
-async function ingestFolder(folderPath, channel) {
-    console.log(`[*] Scanning folder: ${folderPath}`);
-    const files = fs.readdirSync(folderPath)
-        .filter(f => /\.(mp4|mkv|ts|mov)$/i.test(f))
-        .map(f => path.join(folderPath, f));
+async function ingestFolder(folderPath, channel, options = {}) {
+    console.log(`[*] Scanning folder (recursively): ${folderPath}`);
+    const files = findVideoFilesRecursive(folderPath);
 
     console.log(`[*] Found ${files.length} video files to ingest.`);
     for (const f of files) {
         try {
-            await processHindiVideoFile(f, channel);
+            await processHindiVideoFile(f, channel, options);
+            if (options.clean) {
+                try { fs.unlinkSync(f); console.log(`🧹 Cleaned: ${path.basename(f)}`); } catch {}
+            }
             await new Promise(r => setTimeout(r, 3000));
         } catch (err) {
             console.error(`❌ Failed to ingest ${f}:`, err.message);
@@ -315,12 +377,16 @@ async function main() {
     const singleFile = getArg('--file');
     const folder = getArg('--folder');
     const watchDir = getArg('--watch');
+    const anilistId = getArg('--anilist-id');
+    const clean = args.includes('--clean');
+
+    const options = { anilistId, clean };
 
     if (singleFile) {
-        await processHindiVideoFile(path.resolve(singleFile), channel);
+        await processHindiVideoFile(path.resolve(singleFile), channel, options);
         process.exit(0);
     } else if (folder) {
-        await ingestFolder(path.resolve(folder), channel);
+        await ingestFolder(path.resolve(folder), channel, options);
         process.exit(0);
     } else if (watchDir) {
         await startWatcher(path.resolve(watchDir), channel);

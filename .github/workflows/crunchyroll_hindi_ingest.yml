@@ -1,0 +1,124 @@
+name: 🍿 Crunchyroll Hindi Dub Ingestion Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Crunchyroll Watch URL or Series URL'
+        required: true
+        default: 'https://www.crunchyroll.com/watch/GG1U2JJQG'
+      season:
+        description: 'Season Number (optional for series URL, e.g. 1)'
+        required: false
+        default: ''
+      audio_lang:
+        description: 'Audio Language (hi-IN for Hindi, ja-JP, en-US)'
+        required: true
+        default: 'hi-IN'
+      video_quality:
+        description: 'Video Quality (1080p, 720p, 480p)'
+        required: true
+        default: '1080p'
+        type: choice
+        options:
+          - 1080p
+          - 720p
+          - 480p
+      anilist_id:
+        description: 'AniList ID (optional, e.g. 101280)'
+        required: false
+        default: ''
+
+jobs:
+  crunchyroll_cloud_pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      contents: write
+
+    steps:
+      - name: 📦 Checkout Code Repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🟢 Setup Node.js Runtime (v20)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: 🛠️ Install System Tools (FFmpeg, MKVToolNix)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg mkvtoolnix curl
+
+      - name: 📦 Install Node Dependencies
+        run: npm ci || npm install
+
+      - name: 📥 Download crdl Linux Binary
+        run: |
+          echo "Downloading official crdl Linux binary..."
+          curl -sL -o crdl https://github.com/CuteTenshii/crunchyroll-downloader/releases/latest/download/crdl-linux
+          chmod +x crdl
+          ./crdl -h || true
+
+      - name: 🔑 Provision Widevine CDM Credentials
+        env:
+          WVD_CLIENT_ID: ${{ secrets.WVD_CLIENT_ID_B64 }}
+          WVD_PRIVATE_KEY: ${{ secrets.WVD_PRIVATE_KEY_B64 }}
+        run: |
+          echo "Decoding Widevine Device CDM credentials from repository secrets..."
+          echo "$WVD_CLIENT_ID" | base64 -d > client_id.bin
+          echo "$WVD_PRIVATE_KEY" | base64 -d > private_key.pem
+          ls -la client_id.bin private_key.pem
+
+      - name: ⚡ Download Crunchyroll Stream (Cloud High-Speed)
+        env:
+          CR_ETP_RT: ${{ secrets.CR_ETP_RT }}
+        run: |
+          mkdir -p downloads
+          cd downloads
+          cp ../client_id.bin ./
+          cp ../private_key.pem ./
+          
+          CMD="../crdl -url '${{ inputs.url }}' -audio-lang '${{ inputs.audio_lang }}' -video-quality '${{ inputs.video_quality }}' -etp-rt '$CR_ETP_RT'"
+          if [ -n "${{ inputs.season }}" ]; then
+            CMD="$CMD -season '${{ inputs.season }}'"
+          fi
+          
+          echo "🚀 Running crdl download command..."
+          eval $CMD
+          cd ..
+          
+          echo "📁 Download output tree:"
+          ls -R downloads/
+
+      - name: 🚀 Remux & Upload to Telegram Storage Channel
+        env:
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+        run: |
+          ARGS="--folder downloads --clean"
+          if [ -n "${{ inputs.anilist_id }}" ]; then
+            ARGS="$ARGS --anilist-id ${{ inputs.anilist_id }}"
+          fi
+          echo "Processing and uploading files to Telegram..."
+          node ingest_hindi.js $ARGS
+
+      - name: 🔄 Auto-Commit Updated Catalog to GitHub
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin main || true
+          git add data/
+          git commit -m "chore(catalog): auto-sync Crunchyroll Hindi Dub [skip ci]" || echo "No new catalog updates to commit"
+          git push origin main || echo "Push skipped or already up to date"
+
+      - name: 🧹 Cleanup Temporary Runner Files
+        if: always()
+        run: |
+          rm -rf client_id.bin private_key.pem downloads crdl
+          echo "All credentials and temp files wiped."
