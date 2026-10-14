@@ -99,8 +99,6 @@ jobs:
           # Clean IPv6 route if runner lacks IPv6, keep IPv4 routing
           sudo sed -i 's/, ::\/0//g' /etc/wireguard/wg0.conf
           sudo sed -i 's/::\/0,//g' /etc/wireguard/wg0.conf
-          # Set MTU to 1360 to prevent packet fragmentation over tunnel
-          echo "MTU = 1360" | sudo tee -a /etc/wireguard/wg0.conf
           sudo chmod 600 /etc/wireguard/wg0.conf
           
           echo "Activating WireGuard interface..."
