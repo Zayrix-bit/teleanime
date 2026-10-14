@@ -104,8 +104,14 @@ jobs:
           echo "Activating WireGuard interface..."
           sudo wg-quick up wg0
           
+          # Set public DNS so queries route through WireGuard tunnel instead of Azure private DNS
+          echo -e "nameserver 1.1.1.1\nnameserver 8.8.8.8" | sudo tee /etc/resolv.conf > /dev/null
+          
+          echo "WireGuard Status:"
+          sudo wg show
+          
           echo "Testing Indian Public IP and Geo-Location:"
-          curl -s --connect-timeout 10 https://ipinfo.io/json || curl -s https://api.ipify.org
+          curl -s --connect-timeout 5 https://ipinfo.io/json || true
           echo ""
 
       - name: ⚡ Download Crunchyroll Stream (Cloud High-Speed)
