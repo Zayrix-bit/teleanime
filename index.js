@@ -23,7 +23,7 @@ import { scrapeStream } from './src/scraper.js';
 import { convertStreamToMp4, probeVideo } from './src/converter.js';
 import { uploadVideo, closeTelegram } from './src/telegram.js';
 import { searchAnime, getAnimeEpisodes, getCatalog, getCompletedHindiList } from './src/desidubScraper.js';
-import { markEpisodeUploaded, getVpsHindiAnimeList, getVpsHindiEpisodes } from './src/vpsTracker.js';
+import { markEpisodeUploaded, getVpsHindiAnimeList, getVpsHindiEpisodes, claimNextAnime, completeAnime } from './src/vpsTracker.js';
 
 dotenv.config();
 
@@ -46,7 +46,10 @@ function parseArgs() {
         server: 'vidmoly',
         caption: '',
         channel: '',
-        keepLocal: false
+        keepLocal: false,
+        queue: false,
+        workerId: 'worker-1',
+        maxAnime: 100
     };
 
     for (let i = 0; i < args.length; i++) {
@@ -70,6 +73,9 @@ function parseArgs() {
         else if (arg === '--keep-local') opts.keepLocal = true;
         else if (arg === '--tracker') opts.tracker = true;
         else if (arg === '--tracker-episodes') opts.trackerEpisodes = args[++i];
+        else if (arg === '--queue' || arg === '--worker-queue') opts.queue = true;
+        else if (arg === '--worker-id') opts.workerId = args[++i];
+        else if (arg === '--max-anime') opts.maxAnime = parseInt(args[++i], 10);
     }
 
     return opts;
@@ -152,7 +158,135 @@ async function main() {
         return;
     }
 
-    // 5. MAIN INGESTION PIPELINE (SINGLE & BATCH EPISODES)
+    // 5. QUEUE WORKER MODE (PARALLEL 10X QUEUE RUNNER)
+    if (opts.queue) {
+        console.log(`\n==================================================`);
+        console.log(`⚡ LAUNCHING QUEUE WORKER [ID: ${opts.workerId}]`);
+        console.log(`   Target Year: ${opts.year || 'ALL'} | Max Anime: ${opts.maxAnime}`);
+        console.log(`   Cloud Tracker: https://db.anixo.buzz`);
+        console.log(`==================================================\n`);
+
+        const tempDir = path.resolve('temp_uploads');
+        if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+
+        let processedAnime = 0;
+
+        try {
+            while (processedAnime < opts.maxAnime) {
+                console.log(`[*] [Worker ${opts.workerId}] Claiming next pending anime from VPS queue...`);
+                const claim = await claimNextAnime({ workerId: opts.workerId, year: opts.year });
+
+                if (!claim || !claim.success || !claim.anime) {
+                    console.log(`🎉 [Worker ${opts.workerId}] Queue is empty! No more pending anime to process.`);
+                    break;
+                }
+
+                const anime = claim.anime;
+                const episodes = claim.episodes || [];
+                const totalEps = anime.total_episodes || episodes.length;
+
+                console.log(`\n==================================================`);
+                console.log(`🎬 [Worker ${opts.workerId}] CLAIMED: "${anime.title_english}" (${anime.season}) [${anime.year}]`);
+                console.log(`   Total Episodes: ${totalEps} | AniList ID: ${anime.anilist_id || 'N/A'}`);
+                console.log(`==================================================\n`);
+
+                let allEpisodesSucceeded = true;
+
+                for (let ep = 1; ep <= totalEps; ep++) {
+                    const epMeta = episodes.find(e => e.episode_number === ep);
+                    if (epMeta && epMeta.is_uploaded) {
+                        console.log(`⏩ [EP ${ep}/${totalEps}] Already uploaded to Telegram (Msg ID: ${epMeta.telegram_message_id}), skipping.`);
+                        continue;
+                    }
+
+                    console.log(`\n--- [Worker ${opts.workerId}] Processing EP ${ep}/${totalEps} for "${anime.title_english}" ---`);
+                    let outputPath = null;
+
+                    try {
+                        const resolved = await scrapeStream({
+                            site: 'desidub',
+                            query: anime.title_romaji || anime.title_english,
+                            episode: ep,
+                            server: opts.server
+                        });
+
+                        const sanitizedTitle = `${anime.title_english}_S1_EP${ep}`.replace(/[^a-zA-Z0-9_\-\.\s]/g, '').trim();
+                        outputPath = path.join(tempDir, `${sanitizedTitle}_${Date.now()}.mp4`);
+
+                        console.log(`▶ Remuxing stream chunks to MP4...`);
+                        await convertStreamToMp4({
+                            streamUrl: resolved.streamUrl,
+                            outputPath,
+                            headers: resolved.headers
+                        });
+
+                        const meta = await probeVideo(outputPath);
+                        console.log(`ℹ️ Resolution: ${meta.width}x${meta.height} | Duration: ${meta.duration.toFixed(1)}s | Size: ${meta.sizeMB} MB`);
+
+                        const epTitleStr = (epMeta && epMeta.episode_title) ? ` - ${epMeta.episode_title}` : '';
+                        const caption = [
+                            `🎬 **${anime.title_english}${epTitleStr}**`,
+                            `📌 Episode: ${ep} / ${totalEps} (${anime.season})`,
+                            `🔊 Audio: Hindi Dub (Multi-Audio)`,
+                            `📐 Resolution: ${meta.width}x${meta.height}`,
+                            `⏱ Duration: ${Math.floor(meta.duration / 60)}m ${Math.floor(meta.duration % 60)}s`,
+                            `💾 Size: ${meta.sizeMB} MB`
+                        ].join('\n');
+
+                        const uploadResult = await uploadVideo({
+                            filePath: outputPath,
+                            fileName: `${sanitizedTitle}.mp4`,
+                            caption,
+                            duration: meta.duration,
+                            width: meta.width,
+                            height: meta.height,
+                            channelId: opts.channel || null
+                        });
+
+                        console.log(`✅ [Worker ${opts.workerId}] [EP ${ep}/${totalEps}] Uploaded! Msg ID: ${uploadResult.messageId}`);
+
+                        await markEpisodeUploaded({
+                            anilistId: anime.anilist_id,
+                            title: anime.title_english,
+                            episodeNumber: ep,
+                            telegramMessageId: uploadResult.messageId,
+                            telegramChannelId: String(uploadResult.channelId),
+                            fileSizeBytes: uploadResult.sizeBytes,
+                            durationSeconds: Math.round(meta.duration),
+                            serverUsed: opts.server || 'vidmoly'
+                        });
+
+                    } catch (epErr) {
+                        console.error(`❌ [Worker ${opts.workerId}] [EP ${ep}/${totalEps}] Error:`, epErr.message);
+                        allEpisodesSucceeded = false;
+                        break;
+                    } finally {
+                        if (outputPath && fs.existsSync(outputPath) && !opts.keepLocal) {
+                            try { fs.unlinkSync(outputPath); } catch {}
+                        }
+                    }
+                }
+
+                if (allEpisodesSucceeded) {
+                    await completeAnime({ animeId: anime.id, anilistId: anime.anilist_id });
+                    console.log(`\n🎉 [Worker ${opts.workerId}] Anime "${anime.title_english}" (All ${totalEps} Episodes) COMPLETED!`);
+                    processedAnime++;
+                } else {
+                    console.warn(`⚠️ [Worker ${opts.workerId}] Anime "${anime.title_english}" encountered an error. Stopping worker.`);
+                    break;
+                }
+            }
+        } finally {
+            await closeTelegram();
+        }
+
+        console.log(`\n==================================================`);
+        console.log(`🏁 [Worker ${opts.workerId}] Work session finished. Processed: ${processedAnime} anime.`);
+        console.log(`==================================================\n`);
+        return;
+    }
+
+    // 6. MAIN INGESTION PIPELINE (SINGLE & BATCH EPISODES)
     if (!opts.url && !opts.anime && !opts.site) {
         console.log(`
 🚀 Cloud Stream Scraper & Telegram Ingestion Pipeline

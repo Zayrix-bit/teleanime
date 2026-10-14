@@ -1,0 +1,74 @@
+name: ⚡ 10x Parallel Anime Matrix Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      year:
+        description: 'Target Year Filter (e.g. 2022, 2023, or leave blank for all)'
+        required: false
+        default: '2022'
+      max_anime_per_worker:
+        description: 'Max Anime to complete per Worker before exiting'
+        required: false
+        default: '2'
+      server:
+        description: 'Preferred Player / Server'
+        required: false
+        default: 'vidmoly'
+        type: choice
+        options:
+          - vidmoly
+          - mirror
+          - abyss
+          - p2p
+
+jobs:
+  parallel_anime_uploader:
+    name: 🚀 Worker ${{ matrix.worker_id }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 10
+      matrix:
+        worker_id: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+    steps:
+      - name: 📦 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js Runtime (v20)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: 🎬 Install FFmpeg & Media Tools
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y ffmpeg
+
+      - name: 📥 Install Dependencies
+        run: npm ci || npm install
+
+      - name: ⚡ Run Queue Worker ${{ matrix.worker_id }}
+        env:
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID || '38731827' }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH || 'f52eaaae40fbc572fcf046c82f620054' }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || '8902447483:AAH-zDT_BUwV3WmuW9dvkdAVKWlHP4fJowI' }}
+          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID || '-1004365995315' }}
+          VPS_TRACKER_URL: 'https://db.anixo.buzz'
+        run: |
+          echo "=========================================================="
+          echo "🚀 LAUNCHING PARALLEL WORKER ${{ matrix.worker_id }}"
+          echo "Target Year: ${{ inputs.year }}"
+          echo "Server: ${{ inputs.server }}"
+          echo "=========================================================="
+
+          ARGS="--queue --worker-id \"worker-${{ matrix.worker_id }}\" --server \"${{ inputs.server }}\" --max-anime \"${{ inputs.max_anime_per_worker }}\""
+
+          if [ -n "${{ inputs.year }}" ] && [ "${{ inputs.year }}" != "ALL" ]; then
+            ARGS="$ARGS --year \"${{ inputs.year }}\""
+          fi
+
+          eval node index.js $ARGS

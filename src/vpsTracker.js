@@ -103,3 +103,42 @@ export async function getVpsHindiEpisodes({ anilistId = null, search = '' } = {}
     }
     return [];
 }
+
+/**
+ * Claims the next pending anime from the VPS queue atomically for this worker.
+ * 
+ * @param {Object} params
+ * @param {string} [params.workerId='worker-1'] - Unique worker identifier
+ * @param {number} [params.year] - Optional year filter (e.g. 2022)
+ * @returns {Promise<{ success: boolean, anime?: Object, episodes?: Array<Object>, message?: string }>}
+ */
+export async function claimNextAnime({ workerId = 'worker-1', year = null } = {}) {
+    try {
+        let q = `worker_id=${encodeURIComponent(workerId)}`;
+        if (year) q += `&year=${encodeURIComponent(year)}`;
+        const url = `${VPS_API_BASE}/?api=claim_next_anime&${q}`;
+        const res = await fetch(url);
+        return await res.json();
+    } catch (err) {
+        console.warn(`[VPS Tracker] Failed to claim next anime from queue:`, err.message);
+        return { success: false, message: err.message };
+    }
+}
+
+/**
+ * Marks an entire anime as completed once all episodes have finished uploading.
+ */
+export async function completeAnime({ animeId = null, anilistId = null } = {}) {
+    try {
+        let q = '';
+        if (animeId) q = `anime_id=${encodeURIComponent(animeId)}`;
+        else if (anilistId) q = `anilist_id=${encodeURIComponent(anilistId)}`;
+        const url = `${VPS_API_BASE}/?api=complete_anime&${q}`;
+        const res = await fetch(url);
+        return await res.json();
+    } catch (err) {
+        console.warn(`[VPS Tracker] Failed to mark anime complete:`, err.message);
+        return { success: false, message: err.message };
+    }
+}
+
