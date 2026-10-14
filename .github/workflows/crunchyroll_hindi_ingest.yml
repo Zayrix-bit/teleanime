@@ -24,6 +24,10 @@ on:
           - 1080p
           - 720p
           - 480p
+      etp_rt:
+        description: 'Crunchyroll etp_rt Cookie (optional, leave blank to use saved secret)'
+        required: false
+        default: ''
       anilist_id:
         description: 'AniList ID (optional, e.g. 101280)'
         required: false
@@ -82,13 +86,24 @@ jobs:
           cp ../client_id.bin ./
           cp ../private_key.pem ./
           
-          CMD="../crdl -url '${{ inputs.url }}' -audio-lang '${{ inputs.audio_lang }}' -video-quality '${{ inputs.video_quality }}' -etp-rt '$CR_ETP_RT'"
-          if [ -n "${{ inputs.season }}" ]; then
-            CMD="$CMD -season '${{ inputs.season }}'"
+          TOKEN="${{ inputs.etp_rt }}"
+          if [ -z "$TOKEN" ]; then
+            TOKEN="$CR_ETP_RT"
           fi
           
-          echo "🚀 Running crdl download command..."
-          eval $CMD
+          EXTRA_ARGS=()
+          if [ -n "${{ inputs.season }}" ]; then
+            EXTRA_ARGS+=("-season" "${{ inputs.season }}")
+          fi
+          
+          echo "🚀 Launching crdl download for: ${{ inputs.url }}"
+          ../crdl \
+            -url "${{ inputs.url }}" \
+            -audio-lang "${{ inputs.audio_lang }}" \
+            -video-quality "${{ inputs.video_quality }}" \
+            -etp-rt "$TOKEN" \
+            "${EXTRA_ARGS[@]}"
+            
           cd ..
           
           echo "📁 Download output tree:"
