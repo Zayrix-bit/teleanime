@@ -56,41 +56,16 @@ jobs:
           sudo rm -rf /usr/share/dotnet
           df -h
 
-      - name: 🛡️ Connect Indian WireGuard VPN (Mumbai)
-        env:
-          WG_CONF: ${{ secrets.INDIAN_WIREGUARD_CONF }}
-        run: |
-          echo "Installing WireGuard tools..."
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq wireguard-tools
-          
-          echo "Writing WireGuard config..."
-          echo "$WG_CONF" | sudo tee /etc/wireguard/wg0.conf > /dev/null
-          
-          # Remove DNS line so resolvconf is not needed
-          sudo sed -i '/^DNS/d' /etc/wireguard/wg0.conf
-          # Clean IPv6 route if runner lacks IPv6, keep IPv4 routing
-          sudo sed -i 's/, ::\/0//g' /etc/wireguard/wg0.conf
-          sudo sed -i 's/::\/0,//g' /etc/wireguard/wg0.conf
-          sudo chmod 600 /etc/wireguard/wg0.conf
-          
-          echo "Activating WireGuard interface..."
-          sudo wg-quick up wg0
-          
-          echo "Testing Public IP and Geo-Location:"
-          curl -s --connect-timeout 10 https://ipinfo.io/json || curl -s https://api.ipify.org
-          echo ""
-
       - name: 🟢 Setup Node.js Runtime (v20)
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: 'npm'
 
-      - name: 🛠️ Install System Tools (FFmpeg, MKVToolNix)
+      - name: 🛠️ Install System Tools (FFmpeg, MKVToolNix, WireGuard)
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg mkvtoolnix curl
+          sudo apt-get install -y -qq ffmpeg mkvtoolnix curl wireguard-tools
 
       - name: 📦 Install Node Dependencies
         run: npm ci || npm install
@@ -111,6 +86,29 @@ jobs:
           echo "$WVD_CLIENT_ID" | base64 -d > client_id.bin
           echo "$WVD_PRIVATE_KEY" | base64 -d > private_key.pem
           ls -la client_id.bin private_key.pem
+
+      - name: 🛡️ Connect Indian WireGuard VPN (Mumbai)
+        env:
+          WG_CONF: ${{ secrets.INDIAN_WIREGUARD_CONF }}
+        run: |
+          echo "Writing WireGuard config..."
+          echo "$WG_CONF" | sudo tee /etc/wireguard/wg0.conf > /dev/null
+          
+          # Remove DNS line so resolvconf is not needed
+          sudo sed -i '/^DNS/d' /etc/wireguard/wg0.conf
+          # Clean IPv6 route if runner lacks IPv6, keep IPv4 routing
+          sudo sed -i 's/, ::\/0//g' /etc/wireguard/wg0.conf
+          sudo sed -i 's/::\/0,//g' /etc/wireguard/wg0.conf
+          # Set MTU to 1360 to prevent packet fragmentation over tunnel
+          echo "MTU = 1360" | sudo tee -a /etc/wireguard/wg0.conf
+          sudo chmod 600 /etc/wireguard/wg0.conf
+          
+          echo "Activating WireGuard interface..."
+          sudo wg-quick up wg0
+          
+          echo "Testing Indian Public IP and Geo-Location:"
+          curl -s --connect-timeout 10 https://ipinfo.io/json || curl -s https://api.ipify.org
+          echo ""
 
       - name: ⚡ Download Crunchyroll Stream (Cloud High-Speed)
         env:
