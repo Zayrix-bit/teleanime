@@ -6,11 +6,11 @@ on:
       url:
         description: 'Crunchyroll Watch URL or Series URL'
         required: true
-        default: 'https://www.crunchyroll.com/watch/GG1U2JJQG'
+        default: 'https://www.crunchyroll.com/series/GYZJ43JMR/that-time-i-got-reincarnated-as-a-slime'
       season:
         description: 'Season Number (optional for series URL, e.g. 1)'
         required: false
-        default: ''
+        default: '1'
       audio_lang:
         description: 'Audio Language (hi-IN for Hindi, ja-JP, en-US)'
         required: true
@@ -31,7 +31,7 @@ on:
       anilist_id:
         description: 'AniList ID (optional, e.g. 101280)'
         required: false
-        default: ''
+        default: '101280'
       proxy:
         description: 'Indian HTTP/SOCKS5 Proxy (optional, e.g. http://ip:port)'
         required: false
@@ -50,11 +50,34 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 🌐 Setup Cloudflare WARP (Bypass Cloudflare Datacenter Blocks)
-        uses: fscarmen/warp-on-actions@v1.4
-        with:
-          stack: dual
-          mode: wireguard
+      - name: 🧹 Free Up Runner Disk Space (Gain ~45GB SSD)
+        run: |
+          echo "Freeing up runner disk space for large video storage..."
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h
+
+      - name: 🛡️ Connect Indian WireGuard VPN (Mumbai)
+        env:
+          WG_CONF: ${{ secrets.INDIAN_WIREGUARD_CONF }}
+        run: |
+          echo "Installing WireGuard and openresolv..."
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq wireguard openresolv
+          
+          echo "Writing WireGuard config..."
+          echo "$WG_CONF" | sudo tee /etc/wireguard/wg0.conf > /dev/null
+          
+          # Clean IPv6 route if runner lacks IPv6, keep IPv4 routing
+          sudo sed -i 's/, ::\/0//g' /etc/wireguard/wg0.conf
+          sudo sed -i 's/::\/0,//g' /etc/wireguard/wg0.conf
+          sudo chmod 600 /etc/wireguard/wg0.conf
+          
+          echo "Activating WireGuard interface..."
+          sudo wg-quick up wg0
+          
+          echo "Testing Public IP and Geo-Location:"
+          curl -s --connect-timeout 10 https://ipinfo.io/json || curl -s https://api.ipify.org
+          echo ""
 
       - name: 🟢 Setup Node.js Runtime (v20)
         uses: actions/setup-node@v4
@@ -120,12 +143,18 @@ jobs:
             -audio-lang "${{ inputs.audio_lang }}" \
             -video-quality "${{ inputs.video_quality }}" \
             -etp-rt "$TOKEN" \
-            "${EXTRA_ARGS[@]}"
+            "${EXTRA_ARGS[@]}" || true
             
           cd ..
           
           echo "📁 Download output tree:"
           ls -R downloads/
+
+      - name: 🌐 Disconnect WireGuard (Switch back to 10Gbps Runner Network for Fast Upload)
+        if: always()
+        run: |
+          echo "Tearing down WireGuard interface..."
+          sudo wg-quick down wg0 || true
 
       - name: 🚀 Remux & Upload to Telegram Storage Channel
         env:
