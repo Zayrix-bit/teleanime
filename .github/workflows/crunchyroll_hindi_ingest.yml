@@ -46,6 +46,12 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: 🌐 Setup Cloudflare WARP (Bypass Cloudflare Datacenter Blocks)
+        uses: fscarmen/warp-on-actions@v1.4
+        with:
+          stack: dual
+          mode: wireguard
+
       - name: 🟢 Setup Node.js Runtime (v20)
         uses: actions/setup-node@v4
         with:
