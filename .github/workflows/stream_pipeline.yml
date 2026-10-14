@@ -78,7 +78,7 @@ jobs:
           TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID || '38731827' }}
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH || 'f52eaaae40fbc572fcf046c82f620054' }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || '8902447483:AAH-zDT_BUwV3WmuW9dvkdAVKWlHP4fJowI' }}
-          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID || '-1004305106563' }}
+          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID || '-1004365995315' }}
           VPS_TRACKER_URL: 'https://db.anixo.buzz'
         run: |
           echo "=========================================================="
