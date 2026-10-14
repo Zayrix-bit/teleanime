@@ -8,6 +8,8 @@
  * 4. P2PPlay (Streamp2pdub)     - P2PPlay HLS stream extractor
  */
 
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+
 const BASE_URL = 'https://www.desidubanime.me';
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
 
@@ -32,7 +34,7 @@ export function getCompletedHindiList({ year = null } = {}) {
 
 /**
  * Searches DesiDubAnime for anime matching a keyword.
- * Uses high-speed WordPress REST API endpoint + English-to-Romaji smart alias matching.
+ * Prioritizes English title first, then known Romaji aliases, then simplified keywords.
  * 
  * @param {string} query - Keyword to search (e.g. 'My Dress-Up Darling', 'solo leveling')
  * @returns {Promise<Array<{ id: number, title: string, slug: string, link: string }>>}
@@ -52,7 +54,11 @@ export async function searchAnime(query) {
         console.log(`[*] Auto-mapped English title "${query}" -> Romaji alias: "${aliasQuery}"`);
     }
 
-    const queriesToTry = aliasQuery ? [aliasQuery, query] : [query];
+    // Candidate queries: English original FIRST, then Romaji alias, then clean title without Season/Cour
+    const cleanQuery = query.replace(/\s*(\(S\d+.*?\)|Season\s*\d+|Cour\s*\d+|Part\s*\d+|Arc)/gi, '').replace(/[^a-zA-Z0-9\s]/g, ' ').trim();
+    const queriesToTry = [query];
+    if (aliasQuery && aliasQuery.toLowerCase() !== query.toLowerCase()) queriesToTry.push(aliasQuery);
+    if (cleanQuery && cleanQuery.toLowerCase() !== query.toLowerCase() && cleanQuery.length > 2) queriesToTry.push(cleanQuery);
 
     for (const q of queriesToTry) {
         const apiUrl = `${BASE_URL}/wp-json/wp/v2/anime?search=${encodeURIComponent(q)}&per_page=15`;
@@ -89,7 +95,11 @@ export async function searchAnime(query) {
     }
 
     console.warn(`[!] REST search found no direct match, trying website fallback...`);
-    return await fallbackSearch(query);
+    for (const q of queriesToTry) {
+        const fb = await fallbackSearch(q);
+        if (fb && fb.length > 0) return fb;
+    }
+    return [];
 }
 
 /**
@@ -225,9 +235,10 @@ export async function extractVidMolyStream(embedUrl) {
     let cleanUrl = embedUrl;
     const srcMatch = cleanUrl.match(/src=['"]([^'"]+)['"]/i);
     if (srcMatch) cleanUrl = srcMatch[1];
-    if (cleanUrl.includes('vidmoly.net')) {
-        cleanUrl = cleanUrl.replace('vidmoly.net', 'vidmoly.org').replace('http://', 'https://');
-    }
+    if (cleanUrl.startsWith('//')) cleanUrl = 'https:' + cleanUrl;
+    if (!cleanUrl.startsWith('http')) cleanUrl = 'https://' + cleanUrl;
+    cleanUrl = cleanUrl.replace(/vidmoly\.[a-z0-9]+/i, 'vidmoly.org');
+
     console.log(`[*] Resolving VidMoly Stream: ${cleanUrl}...`);
     const res = await fetch(cleanUrl, {
         headers: {
@@ -237,12 +248,13 @@ export async function extractVidMolyStream(embedUrl) {
     });
     const html = await res.text();
     const match = html.match(/sources:\s*\[\s*\{\s*file:\s*['"]([^'"]+)['"]/i) 
-        || html.match(/file:\s*['"](https?:\/\/[^'"]+\.m3u8[^'"]*)['"]/i);
+        || html.match(/file:\s*['"](https?:\/\/[^'"]+\.m3u8[^'"]*)['"]/i)
+        || html.match(/https?:\/\/[^"'\s]+\.m3u8[^"'\s]*/);
 
     if (match) {
         return {
             server: 'VidMoly',
-            streamUrl: match[1],
+            streamUrl: match[1] || match[0],
             headers: {
                 'User-Agent': USER_AGENT,
                 'Referer': 'https://vidmoly.org/'
@@ -250,6 +262,57 @@ export async function extractVidMolyStream(embedUrl) {
         };
     }
     throw new Error(`Failed to extract M3U8 from VidMoly: ${embedUrl}`);
+}
+
+/**
+ * 2. Ruby / StreamRuby (Rubydub) Extractor
+ * Unpacks Dean Edwards p.a.c.k.e.r. script and extracts master M3U8 with multi-audio.
+ */
+export async function extractRubyStream(embedUrl) {
+    let cleanUrl = embedUrl;
+    const srcMatch = cleanUrl.match(/src=['"]([^'"]+)['"]/i);
+    if (srcMatch) cleanUrl = srcMatch[1];
+    if (cleanUrl.startsWith('//')) cleanUrl = 'https:' + cleanUrl;
+    if (!cleanUrl.startsWith('http')) cleanUrl = 'https://' + cleanUrl;
+
+    console.log(`[*] Resolving Ruby/StreamRuby Stream: ${cleanUrl}...`);
+    const res = await fetch(cleanUrl, {
+        headers: {
+            'User-Agent': USER_AGENT,
+            'Referer': BASE_URL
+        }
+    });
+    const html = await res.text();
+    const packRegex = /eval\(function\(p,a,c,k,e,d\)[\s\S]*?\.split\('\|'\)\)\)/;
+    const match = html.match(packRegex);
+    if (match) {
+        try {
+            const unpacked = new Function('return ' + match[0].replace(/^eval/, ''))();
+            const m3u8Match = unpacked.match(/https?:\/\/[^"']+\.m3u8[^"']*/);
+            if (m3u8Match) {
+                return {
+                    server: 'Ruby',
+                    streamUrl: m3u8Match[0],
+                    headers: {
+                        'User-Agent': USER_AGENT,
+                        'Referer': 'https://rubyvidhub.com/'
+                    }
+                };
+            }
+        } catch {}
+    }
+    const directM3u8 = html.match(/https?:\/\/[^"'\s]+\.m3u8[^"'\s]*/);
+    if (directM3u8) {
+        return {
+            server: 'Ruby',
+            streamUrl: directM3u8[0],
+            headers: {
+                'User-Agent': USER_AGENT,
+                'Referer': 'https://rubyvidhub.com/'
+            }
+        };
+    }
+    throw new Error(`Failed to extract M3U8 from Ruby Player: ${embedUrl}`);
 }
 
 /**
@@ -449,8 +512,10 @@ export async function extractEpisodeStream(watchUrl, preferredServer = 'vidmoly'
                 let embedUrl = Buffer.from(parts[1], 'base64').toString('utf-8');
                 const srcMatch = embedUrl.match(/src=['"]([^'"]+)['"]/i);
                 if (srcMatch) embedUrl = srcMatch[1];
-                if (embedUrl.includes('vidmoly.net')) {
-                    embedUrl = embedUrl.replace('vidmoly.net', 'vidmoly.org').replace('http://', 'https://');
+                if (embedUrl.startsWith('//')) embedUrl = 'https:' + embedUrl;
+                if (!embedUrl.startsWith('http')) embedUrl = 'https://' + embedUrl;
+                if (embedUrl.includes('vidmoly')) {
+                    embedUrl = embedUrl.replace(/vidmoly\.[a-z0-9]+/i, 'vidmoly.org');
                 }
                 servers.push({ name, embedUrl });
             } catch {}
@@ -460,8 +525,10 @@ export async function extractEpisodeStream(watchUrl, preferredServer = 'vidmoly'
     const iframeMatch = html.match(/<iframe[^>]+src=['"]([^'"]+)['"]/i);
     if (iframeMatch && !servers.some(s => s.embedUrl === iframeMatch[1])) {
         let defaultUrl = iframeMatch[1];
-        if (defaultUrl.includes('vidmoly.net')) {
-            defaultUrl = defaultUrl.replace('vidmoly.net', 'vidmoly.org').replace('http://', 'https://');
+        if (defaultUrl.startsWith('//')) defaultUrl = 'https:' + defaultUrl;
+        if (!defaultUrl.startsWith('http')) defaultUrl = 'https://' + defaultUrl;
+        if (defaultUrl.includes('vidmoly')) {
+            defaultUrl = defaultUrl.replace(/vidmoly\.[a-z0-9]+/i, 'vidmoly.org');
         }
         servers.unshift({ name: 'DefaultEmbed', embedUrl: defaultUrl });
     }
@@ -470,10 +537,11 @@ export async function extractEpisodeStream(watchUrl, preferredServer = 'vidmoly'
     servers.forEach(s => console.log(`   • [${s.name}] -> ${s.embedUrl}`));
 
     // Sort order based on preferredServer
-    const serverKeys = ['vidmoly', 'mirror', 'abyss', 'p2p'];
+    const prefStr = (typeof preferredServer === 'string' ? preferredServer : (preferredServer?.server || 'vidmoly')).toLowerCase();
+    const serverKeys = ['vidmoly', 'ruby', 'mirror', 'abyss', 'p2p'];
     const orderedKeys = [
-        preferredServer.toLowerCase(),
-        ...serverKeys.filter(k => k !== preferredServer.toLowerCase())
+        prefStr,
+        ...serverKeys.filter(k => k !== prefStr)
     ];
 
     let lastError = null;
@@ -495,6 +563,26 @@ export async function extractEpisodeStream(watchUrl, preferredServer = 'vidmoly'
                     };
                 } catch (e) {
                     console.warn(`[!] VidMoly extraction failed: ${e.message}`);
+                    lastError = e;
+                }
+            }
+        }
+
+        if (key === 'ruby') {
+            const s = servers.find(x => x.name.toLowerCase().includes('ruby') || x.embedUrl.includes('rubyvidhub') || x.embedUrl.includes('streamruby'));
+            if (s) {
+                try {
+                    const result = await extractRubyStream(s.embedUrl);
+                    return {
+                        title,
+                        episodeNumber,
+                        serverName: result.server,
+                        streamUrl: result.streamUrl,
+                        headers: result.headers,
+                        availableServers: servers
+                    };
+                } catch (e) {
+                    console.warn(`[!] Ruby extraction failed: ${e.message}`);
                     lastError = e;
                 }
             }

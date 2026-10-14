@@ -22,10 +22,11 @@ import dotenv from 'dotenv';
 import { scrapeStream } from './src/scraper.js';
 import { convertStreamToMp4, probeVideo } from './src/converter.js';
 import { uploadVideo, closeTelegram } from './src/telegram.js';
-import { searchAnime, getAnimeEpisodes, getCatalog, getCompletedHindiList } from './src/desidubScraper.js';
-import { markEpisodeUploaded, getVpsHindiAnimeList, getVpsHindiEpisodes, claimNextAnime, completeAnime } from './src/vpsTracker.js';
+import { searchAnime, getAnimeEpisodes, extractEpisodeStream, getCatalog, getCompletedHindiList } from './src/desidubScraper.js';
+import { markEpisodeUploaded, getVpsHindiAnimeList, getVpsHindiEpisodes, claimNextAnime, completeAnime, releaseAnime, markAnimeUnavailable, resetQueue } from './src/vpsTracker.js';
 
 dotenv.config();
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
 function parseArgs() {
     const args = process.argv.slice(2);
@@ -190,6 +191,33 @@ async function main() {
                 console.log(`   Total Episodes: ${totalEps} | AniList ID: ${anime.anilist_id || 'N/A'}`);
                 console.log(`==================================================\n`);
 
+                // 1. Resolve Anime on DesiDubAnime
+                let matchedSiteAnime = null;
+                const searchCandidates = [anime.title_english, anime.title_romaji].filter(Boolean);
+                for (const cand of searchCandidates) {
+                    try {
+                        const res = await searchAnime(cand);
+                        if (res && res.length > 0) {
+                            matchedSiteAnime = res[0];
+                            break;
+                        }
+                    } catch {}
+                }
+
+                if (!matchedSiteAnime) {
+                    console.warn(`⚠️ [Worker ${opts.workerId}] Anime "${anime.title_english}" was not found on DesiDubAnime catalog. Marking Unavailable.`);
+                    await markAnimeUnavailable({ animeId: anime.id, anilistId: anime.anilist_id });
+                    continue;
+                }
+
+                console.log(`[*] [Worker ${opts.workerId}] Matched catalog entry: "${matchedSiteAnime.title}" (${matchedSiteAnime.link})`);
+                let siteEpisodes = [];
+                try {
+                    siteEpisodes = await getAnimeEpisodes(matchedSiteAnime.link);
+                } catch (epListErr) {
+                    console.warn(`[!] Failed to get episode list for "${anime.title_english}":`, epListErr.message);
+                }
+
                 let allEpisodesSucceeded = true;
 
                 for (let ep = 1; ep <= totalEps; ep++) {
@@ -203,12 +231,18 @@ async function main() {
                     let outputPath = null;
 
                     try {
-                        const resolved = await scrapeStream({
-                            site: 'desidub',
-                            query: anime.title_romaji || anime.title_english,
-                            episode: ep,
-                            server: opts.server
-                        });
+                        const targetSiteEp = siteEpisodes.find(e => e.episodeNumber === ep) || siteEpisodes[ep - 1];
+                        let resolved = null;
+                        if (targetSiteEp && targetSiteEp.url) {
+                            resolved = await extractEpisodeStream(targetSiteEp.url, opts.server || 'vidmoly');
+                        } else {
+                            resolved = await scrapeStream({
+                                site: 'desidub',
+                                query: anime.title_english || anime.title_romaji,
+                                episode: ep,
+                                server: opts.server
+                            });
+                        }
 
                         const sanitizedTitle = `${anime.title_english}_S1_EP${ep}`.replace(/[^a-zA-Z0-9_\-\.\s]/g, '').trim();
                         outputPath = path.join(tempDir, `${sanitizedTitle}_${Date.now()}.mp4`);
@@ -272,8 +306,9 @@ async function main() {
                     console.log(`\n🎉 [Worker ${opts.workerId}] Anime "${anime.title_english}" (All ${totalEps} Episodes) COMPLETED!`);
                     processedAnime++;
                 } else {
-                    console.warn(`⚠️ [Worker ${opts.workerId}] Anime "${anime.title_english}" encountered an error. Stopping worker.`);
-                    break;
+                    console.warn(`⚠️ [Worker ${opts.workerId}] Anime "${anime.title_english}" encountered an error. Releasing back to queue.`);
+                    await releaseAnime({ animeId: anime.id, anilistId: anime.anilist_id });
+                    continue;
                 }
             }
         } finally {

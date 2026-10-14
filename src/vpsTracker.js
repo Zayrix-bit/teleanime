@@ -142,3 +142,54 @@ export async function completeAnime({ animeId = null, anilistId = null } = {}) {
     }
 }
 
+/**
+ * Releases a claimed anime back to Pending state so it can be claimed again.
+ */
+export async function releaseAnime({ animeId = null, anilistId = null } = {}) {
+    try {
+        let q = '';
+        if (animeId) q = `anime_id=${encodeURIComponent(animeId)}`;
+        else if (anilistId) q = `anilist_id=${encodeURIComponent(anilistId)}`;
+        const url = `${VPS_API_BASE}/?api=release_anime&${q}`;
+        const res = await fetch(url);
+        return await res.json();
+    } catch (err) {
+        console.warn(`[VPS Tracker] Failed to release anime:`, err.message);
+        return { success: false, message: err.message };
+    }
+}
+
+/**
+ * Marks an anime as Unavailable (e.g. not found on scraper source).
+ */
+export async function markAnimeUnavailable({ animeId = null, anilistId = null } = {}) {
+    try {
+        let q = '';
+        if (animeId) q = `anime_id=${encodeURIComponent(animeId)}`;
+        else if (anilistId) q = `anilist_id=${encodeURIComponent(anilistId)}`;
+        const url = `${VPS_API_BASE}/?api=mark_unavailable&${q}`;
+        const res = await fetch(url);
+        return await res.json();
+    } catch (err) {
+        console.warn(`[VPS Tracker] Failed to mark anime unavailable:`, err.message);
+        return { success: false, message: err.message };
+    }
+}
+
+/**
+ * Resets all in-progress queue claims back to Pending.
+ */
+export async function resetQueue({ year = null } = {}) {
+    try {
+        let q = '';
+        if (year) q = `&year=${encodeURIComponent(year)}`;
+        const url = `${VPS_API_BASE}/?api=reset_queue${q}`;
+        const res = await fetch(url);
+        return await res.json();
+    } catch (err) {
+        console.warn(`[VPS Tracker] Failed to reset queue:`, err.message);
+        return { success: false, message: err.message };
+    }
+}
+
+
