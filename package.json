@@ -7,7 +7,9 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "sync-catalog": "node sync_catalog.js"
+    "sync-catalog": "node sync_catalog.js",
+    "ingest-hindi": "node ingest_hindi.js",
+    "watch-hindi": "node ingest_hindi.js --watch hindi_queue"
   },
   "dependencies": {
     "cors": "^2.8.5",

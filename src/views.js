@@ -16,8 +16,9 @@ export function renderPlayerHtml({
     malId,
     subtitles = []
 }) {
+    const trackLabel = track === 'hindi' ? 'HINDI DUB 🇮🇳' : (track || 'sub').toUpperCase();
     const displayTitle = title 
-        ? `${title} · Episode ${episode} [${(track || 'sub').toUpperCase()}]`
+        ? `${title} · Episode ${episode} [${trackLabel}]`
         : fileName;
 
     return `<!DOCTYPE html>
@@ -245,6 +246,140 @@ export function renderPlayerHtml({
 </html>`;
 }
 
+/**
+ * PURE EDGE-TO-EDGE EMBED PLAYER FOR EXTERNAL WEBSITES (NO CLUTTER / NO HEADERS)
+ */
+export function renderPureEmbedHtml({
+    streamUrl,
+    title,
+    episode,
+    track,
+    poster,
+    subtitles = []
+}) {
+    const trackLabel = track === 'hindi' ? 'HINDI DUB 🇮🇳' : (track || 'sub').toUpperCase();
+    const displayTitle = title ? `${title} - EP ${episode} [${trackLabel}]` : 'Anime Video Stream';
+
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>${displayTitle}</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body {
+            width: 100%;
+            height: 100%;
+            background: #000000;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+        .embed-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #000000;
+        }
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: block;
+        }
+        .quality-badge {
+            position: absolute;
+            top: 14px;
+            right: 14px;
+            background: rgba(0, 0, 0, 0.7);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: #38bdf8;
+            font-size: 11px;
+            font-weight: 700;
+            padding: 4px 8px;
+            border-radius: 6px;
+            letter-spacing: 0.5px;
+            pointer-events: none;
+            opacity: 0.85;
+            transition: opacity 0.3s;
+            backdrop-filter: blur(8px);
+            z-index: 20;
+        }
+        .embed-container:hover .quality-badge {
+            opacity: 1;
+        }
+        ::cue {
+            background: rgba(0, 0, 0, 0.82);
+            color: #ffffff;
+            font-size: 16px;
+            font-weight: 600;
+            text-shadow: 0 1px 3px rgba(0,0,0,0.9);
+            border-radius: 4px;
+            padding: 4px 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="embed-container">
+        <div class="quality-badge">${track === 'hindi' ? '🇮🇳 1080p HINDI' : '1080p FHD'}</div>
+        <video id="player" controls playsinline preload="metadata" ${poster ? `poster="${poster}"` : ''}>
+            <source src="${streamUrl}" type="video/mp4">
+            ${subtitles.map(s => {
+                const src = s.url ? `/api/proxy/vtt?url=${encodeURIComponent(s.url)}` : (s.proxy_url || '');
+                return `<track kind="captions" label="${s.label || 'English'}" src="${src}" default>`;
+            }).join('\n            ')}
+            Your browser does not support HTML5 video streaming.
+        </video>
+    </div>
+
+    <script>
+        const v = document.getElementById('player');
+        // Keyboard controls inside iframe
+        window.addEventListener('keydown', (e) => {
+            if (e.target.tagName === 'INPUT') return;
+            switch(e.code) {
+                case 'Space':
+                    e.preventDefault();
+                    v.paused ? v.play() : v.pause();
+                    break;
+                case 'ArrowRight':
+                    e.preventDefault();
+                    v.currentTime = Math.min(v.duration || 0, v.currentTime + 5);
+                    break;
+                case 'ArrowLeft':
+                    e.preventDefault();
+                    v.currentTime = Math.max(0, v.currentTime - 5);
+                    break;
+                case 'ArrowUp':
+                    e.preventDefault();
+                    v.volume = Math.min(1, v.volume + 0.1);
+                    break;
+                case 'ArrowDown':
+                    e.preventDefault();
+                    v.volume = Math.max(0, v.volume - 0.1);
+                    break;
+                case 'KeyF':
+                    e.preventDefault();
+                    if (!document.fullscreenElement) {
+                        v.requestFullscreen ? v.requestFullscreen() : v.webkitRequestFullscreen();
+                    } else {
+                        document.exitFullscreen ? document.exitFullscreen() : document.webkitExitFullscreen();
+                    }
+                    break;
+                case 'KeyM':
+                    e.preventDefault();
+                    v.muted = !v.muted;
+                    break;
+            }
+        });
+    </script>
+</body>
+</html>`;
+}
+
 export function renderDashboardHtml({ videos = [], animeCatalog = [], cacheStats = {} }) {
     const catalogRows = animeCatalog.map(a => `
         <tr>
@@ -260,8 +395,8 @@ export function renderDashboardHtml({ videos = [], animeCatalog = [], cacheStats
                 </div>
             </td>
             <td>
-                <span class="size-badge" style="background: ${a.track === 'dub' ? 'rgba(236,72,153,0.15)' : 'rgba(56,189,248,0.15)'}; color: ${a.track === 'dub' ? '#f472b6' : '#38bdf8'}; font-weight: 700;">
-                    ${(a.track || 'sub').toUpperCase()}
+                <span class="size-badge" style="${a.track === 'hindi' ? 'background: linear-gradient(135deg, rgba(245,158,11,0.25), rgba(239,68,68,0.25)); color: #fbbf24; border: 1px solid rgba(245,158,11,0.4); font-weight: 800;' : (a.track === 'dub' ? 'background: rgba(236,72,153,0.15); color: #f472b6; font-weight: 700;' : 'background: rgba(56,189,248,0.15); color: #38bdf8; font-weight: 700;')}">
+                    ${a.track === 'hindi' ? '🇮🇳 HINDI DUB' : (a.track || 'sub').toUpperCase()}
                 </span>
             </td>
             <td><span class="size-badge">${a.sizeMB || '0'} MB</span></td>
