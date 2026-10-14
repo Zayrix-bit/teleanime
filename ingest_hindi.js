@@ -81,6 +81,15 @@ async function resolveAnimeMeta(rawTitle) {
         console.warn(`[AniList Warning] ${err.message}`);
     }
 
+    return {
+        anilistId: null,
+        malId: null,
+        title: cleanSearch,
+        poster: '',
+        totalEpisodes: 0
+    };
+}
+
 // 1b. Search AniList GraphQL API by explicit ID
 async function resolveAnimeById(id) {
     console.log(`[*] Querying AniList GraphQL for ID: #${id}...`);
