@@ -414,72 +414,28 @@ export async function extractFilesForeverStream(embedUrl) {
 
     if (!fileId) throw new Error(`Invalid FilesForever URL: ${embedUrl}`);
 
-    // Attempt backend resolver via embedhelper2.php
     try {
-        const params = new URLSearchParams({
-            sid: fileId,
-            UserFavSite: '',
-            currentDomain: '["","pro.iqsmartgames.com"]'
+        const fileUrl = `https://ddn.iqsmartgames.com/file/${fileId}`;
+        const fileRes = await fetch(fileUrl, {
+            headers: { 'User-Agent': USER_AGENT, 'Referer': embedUrl },
+            redirect: 'follow'
         });
-        const helperRes = await fetch('https://pro.iqsmartgames.com/embedhelper2.php', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'User-Agent': USER_AGENT,
-                'Referer': `https://pro.iqsmartgames.com/stream/${fileId}?autoplay=1&from_file_page=1`
-            },
-            body: params.toString()
-        });
-        if (helperRes.ok) {
-            const data = await helperRes.json();
-            if (data.mresult) {
-                const decoded = JSON.parse(Buffer.from(data.mresult, 'base64').toString('utf-8'));
-                if (decoded.smwh) {
-                    const hanerixRes = await fetch(`https://hanerix.com/e/${decoded.smwh}`, {
-                        headers: {
-                            'User-Agent': USER_AGENT,
-                            'Referer': 'https://pro.iqsmartgames.com/'
-                        }
-                    });
-                    const hHtml = await hanerixRes.text();
-                    const evalMatch = hHtml.match(/eval\((function\(p,a,c,k,e,d\)[\s\S]*?\.split\('\|'\)[\s\S]*?)\)\s*<\/script>/);
-                    if (evalMatch) {
-                        const fn = new Function('return ' + evalMatch[1]);
-                        const unpacked = fn();
-                        const hlsMatch = unpacked.match(/["']hls2["']:\s*["']([^"']+)["']/) 
-                            || unpacked.match(/["']hls3["']:\s*["']([^"']+)["']/)
-                            || unpacked.match(/https?:[^"'\s>]+\.m3u8[^"'\s>]*/);
-                        if (hlsMatch) {
-                            return {
-                                server: 'FilesForever',
-                                streamUrl: hlsMatch[1] || hlsMatch[0],
-                                headers: {
-                                    'User-Agent': USER_AGENT,
-                                    'Referer': 'https://hanerix.com/'
-                                }
-                            };
-                        }
-                    }
+        const fileHtml = await fileRes.text();
+        const sourceMatch = fileHtml.match(/name=["']source_url["']\s+value=["']([^"']+)["']/i)
+                         || fileHtml.match(/value=["']([^"']+)["']\s+name=["']source_url["']/i);
+        if (sourceMatch) {
+            const streamUrl = sourceMatch[1].replace(/&amp;/g, '&');
+            return {
+                server: 'FilesForever',
+                streamUrl,
+                headers: {
+                    'User-Agent': USER_AGENT,
+                    'Referer': 'https://ddn.iqsmartgames.com/'
                 }
-            }
+            };
         }
     } catch (e) {
-        console.warn(`[!] FilesForever helper failed: ${e.message}`);
-    }
-
-    // Direct stream check in page HTML
-    const fileUrl = `https://ddn.iqsmartgames.com/file/${fileId}`;
-    const fileRes = await fetch(fileUrl, {
-        headers: { 'User-Agent': USER_AGENT, 'Referer': embedUrl }
-    });
-    const fileHtml = await fileRes.text();
-    const m3u8Match = fileHtml.match(/https?:\/\/[^"'\s\\]+\.m3u8[^"'\s\\]*/);
-    if (m3u8Match) {
-        return {
-            server: 'FilesForever',
-            streamUrl: m3u8Match[0],
-            headers: { 'User-Agent': USER_AGENT, 'Referer': 'https://filesforever.link/' }
-        };
+        console.warn(`[!] DDN source extraction error: ${e.message}`);
     }
 
     throw new Error(`Failed to extract playable stream from FilesForever: ${embedUrl}`);

@@ -164,8 +164,72 @@ export async function createSmartMasterServer(masterUrl, headers = {}) {
 }
 
 /**
- * Downloads and converts an HLS stream (m3u8), TS chunks, or direct stream into a single MP4.
- * Smartly resolves highest quality stream (1080p) and isolates ONLY Hindi audio before conversion.
+ * Downloads direct MKV / video files using aria2c and extracts/remuxes Hindi audio to clean MP4.
+ */
+async function convertDirectMediaToMp4({ streamUrl, outputPath, headers = {} }) {
+    console.log(`\n==================================================`);
+    console.log(`🎬 DIRECT MEDIA ARIA2C + FFMPEG REMUX ENGINE`);
+    console.log(`   Source: ${streamUrl}`);
+    console.log(`   Output: ${outputPath}`);
+    console.log(`==================================================`);
+
+    const tempDir = path.dirname(outputPath);
+    const tempMkv = path.join(tempDir, `temp_raw_${Date.now()}.mkv`);
+    const tempFilename = path.basename(tempMkv);
+
+    const ref = headers['Referer'] || headers['referer'] || 'https://ddn.iqsmartgames.com/';
+    const ua = headers['User-Agent'] || headers['user-agent'] || 'Mozilla/5.0';
+
+    console.log(`[*] Downloading raw media at high speed with aria2c...`);
+    const ariaCmd = `aria2c -x 8 -s 8 --header="Referer: ${ref}" --header="User-Agent: ${ua}" -d "${tempDir}" -o "${tempFilename}" "${streamUrl}"`;
+    await execAsync(ariaCmd);
+
+    try {
+        console.log(`[*] Probing audio and video streams with ffprobe...`);
+        const { stdout: probeJson } = await execAsync(`ffprobe -v error -show_entries stream=index,codec_type,codec_name:stream_tags=language -of json "${tempMkv}"`);
+        const data = JSON.parse(probeJson);
+
+        let videoIdx = 0;
+        let defaultAudioIdx = null;
+        let hindiIdx = null;
+
+        for (const s of data.streams || []) {
+            if (s.codec_type === 'video' && videoIdx === 0) {
+                videoIdx = s.index;
+            }
+            if (s.codec_type === 'audio') {
+                if (defaultAudioIdx === null) defaultAudioIdx = s.index;
+                const lang = (s.tags?.language || '').toLowerCase();
+                if (lang === 'hin' || lang === 'hi' || lang === 'hindi') {
+                    hindiIdx = s.index;
+                }
+            }
+        }
+
+        const chosenAudio = hindiIdx !== null ? hindiIdx : (defaultAudioIdx !== null ? defaultAudioIdx : 1);
+        console.log(`🎯 [AUDIO ISOLATION] Selected Audio Track: ${chosenAudio} (Hindi Found: ${hindiIdx !== null})`);
+
+        const ffmpegCmd = `ffmpeg -y -hide_banner -loglevel warning -i "${tempMkv}" -map 0:${videoIdx} -map 0:${chosenAudio} -c:v copy -tag:v hvc1 -c:a aac -b:a 192k -metadata:s:a:0 language=hin -metadata:s:a:0 title=Hindi -movflags +faststart "${outputPath}"`;
+        console.log(`[*] Remuxing to clean MP4 with Hindi audio...`);
+        await execAsync(ffmpegCmd);
+    } finally {
+        if (fs.existsSync(tempMkv)) {
+            try { fs.unlinkSync(tempMkv); } catch {}
+        }
+    }
+
+    if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size === 0) {
+        throw new Error(`Direct media remux finished but output file is missing or empty: ${outputPath}`);
+    }
+
+    const sizeMB = (fs.statSync(outputPath).size / (1024 * 1024)).toFixed(2);
+    console.log(`✅ Direct stream converted to MP4! (Size: ${sizeMB} MB)`);
+    return outputPath;
+}
+
+/**
+ * Downloads a video from a direct HLS, TS, or MP4 URL, converts/remuxes it to MP4,
+ * and preserves metadata with pure Hindi audio isolation.
  * 
  * @param {Object} options
  * @param {string} options.streamUrl - Direct M3U8, TS, or MP4 URL
@@ -181,6 +245,11 @@ export async function convertStreamToMp4({ streamUrl, outputPath, headers = {} }
 
     if (fs.existsSync(outputPath)) {
         try { fs.unlinkSync(outputPath); } catch {}
+    }
+
+    // Direct MKV / Worker / DDN file handler
+    if (streamUrl.includes('.mkv') || streamUrl.includes('workers.dev') || streamUrl.includes('/cldst') || streamUrl.includes('name=')) {
+        return await convertDirectMediaToMp4({ streamUrl, outputPath, headers });
     }
 
     // Format headers for FFmpeg
@@ -214,10 +283,16 @@ export async function convertStreamToMp4({ streamUrl, outputPath, headers = {} }
         return new Promise((resolve, reject) => {
             const inputArgs = [];
             if (headerStr) inputArgs.push('-headers', headerStr);
+            // CRITICAL SYNC FIX: When isolating separate audio from video variant in HLS streams,
+            // we MUST preserve MPEG-TS Presentation Timestamps (-copyts) across both inputs.
+            // Without -copyts, FFmpeg resets both inputs independently to 0, destroying the original
+            // studio audio delay (~0.5s-1.5s) and causing voice to lead / animation to lag!
+            if (audioUrl) inputArgs.push('-copyts');
             inputArgs.push('-i', videoUrl);
 
             if (audioUrl) {
                 if (headerStr) inputArgs.push('-headers', headerStr);
+                inputArgs.push('-copyts');
                 inputArgs.push('-i', audioUrl);
             }
 
@@ -226,6 +301,11 @@ export async function convertStreamToMp4({ streamUrl, outputPath, headers = {} }
             const mappingArgs = audioUrl
                 ? ['-map', '0:v:0', '-map', '1:a:0']
                 : ['-map', '0:v:0', '-map', '0:a:0?'];
+
+            // Sync preservation: aligns starting timestamps without breaking relative PTS delta
+            const syncArgs = audioUrl
+                ? ['-avoid_negative_ts', 'make_zero', '-max_interleave_delta', '0']
+                : [];
 
             const metadataArgs = [
                 '-metadata:s:a:0', 'language=hin',
@@ -239,6 +319,7 @@ export async function convertStreamToMp4({ streamUrl, outputPath, headers = {} }
                 '-protocol_whitelist', 'file,http,https,tcp,tls,crypto,data',
                 ...inputArgs,
                 ...mappingArgs,
+                ...syncArgs,
                 ...metadataArgs,
                 ...extraArgs,
                 outputPath

@@ -12,21 +12,38 @@ import fs from 'fs';
 import path from 'path';
 import dotenv from 'dotenv';
 
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const envPath = path.resolve(__dirname, '../.env');
+
+// Force-load root .env regardless of working directory
+if (fs.existsSync(envPath)) {
+    dotenv.config({ path: envPath });
+}
 dotenv.config();
 
-const API_ID = parseInt(process.env.TELEGRAM_API_ID || '', 10);
-const API_HASH = process.env.TELEGRAM_API_HASH || '';
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
-const DEFAULT_CHANNEL_ID = process.env.TELEGRAM_CHANNEL_ID || '';
-const SESSION_FILE = path.resolve('.telegram_session.txt');
+const SESSION_FILE = path.resolve(__dirname, '../.telegram_session.txt');
 
 let client = null;
 let channelEntity = null;
+
+function getCredentials() {
+    return {
+        API_ID: parseInt(process.env.TELEGRAM_API_ID || '', 10),
+        API_HASH: process.env.TELEGRAM_API_HASH || '',
+        BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN || '',
+        DEFAULT_CHANNEL_ID: process.env.TELEGRAM_CHANNEL_ID || ''
+    };
+}
 
 /**
  * Initializes and connects the Telegram MTProto client.
  */
 export async function initTelegram(channelIdOverride = null) {
+    const { API_ID, API_HASH, BOT_TOKEN, DEFAULT_CHANNEL_ID } = getCredentials();
+
     if (!API_ID || !API_HASH || !BOT_TOKEN) {
         throw new Error("Missing TELEGRAM_API_ID, TELEGRAM_API_HASH, or TELEGRAM_BOT_TOKEN in environment.");
     }

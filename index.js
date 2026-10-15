@@ -18,7 +18,13 @@
 
 import path from 'path';
 import fs from 'fs';
+import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+dotenv.config({ path: path.resolve(__dirname, '.env') });
+dotenv.config();
 import { scrapeStream } from './src/scraper.js';
 import { convertStreamToMp4, probeVideo } from './src/converter.js';
 import { uploadVideo, closeTelegram } from './src/telegram.js';
@@ -167,12 +173,11 @@ async function main() {
         console.log(`   Cloud Tracker: https://db.anixo.buzz`);
         console.log(`==================================================\n`);
 
-        const tempDir = path.resolve('temp_uploads');
+        const tempDir = path.resolve(__dirname, 'temp_uploads');
         if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
         let processedAnime = 0;
-        const sessionFailedAnimeIds = new Set();
-        let consecutiveSkipped = 0;
+        let consecutiveErrors = 0;
 
         try {
             while (processedAnime < opts.maxAnime) {
@@ -185,23 +190,6 @@ async function main() {
                 }
 
                 const anime = claim.anime;
-                const animeKey = String(anime.id || anime.anilist_id || anime.title_english);
-
-                // Anti-deadlock: prevent same worker from re-claiming an anime it already failed
-                if (sessionFailedAnimeIds.has(animeKey)) {
-                    consecutiveSkipped++;
-                    console.log(`⏩ [Worker ${opts.workerId}] Anime "${anime.title_english}" was already attempted in this session. Releasing back.`);
-                    await releaseAnime({ animeId: anime.id, anilistId: anime.anilist_id });
-                    if (consecutiveSkipped >= 5) {
-                        console.log(`⚠️ [Worker ${opts.workerId}] Reached max consecutive skipped claims. All available queue items attempted. Exiting cleanly.`);
-                        break;
-                    }
-                    await new Promise(r => setTimeout(r, 2000));
-                    continue;
-                }
-
-                consecutiveSkipped = 0;
-
                 const episodes = claim.episodes || [];
                 const totalEps = anime.total_episodes || episodes.length;
 
@@ -225,7 +213,6 @@ async function main() {
 
                 if (!matchedSiteAnime) {
                     console.warn(`⚠️ [Worker ${opts.workerId}] Anime "${anime.title_english}" has no relevant matches on DesiDubAnime catalog. Marking Unavailable.`);
-                    sessionFailedAnimeIds.add(animeKey);
                     await markAnimeUnavailable({ animeId: anime.id, anilistId: anime.anilist_id });
                     continue;
                 }
@@ -253,7 +240,7 @@ async function main() {
                     try {
                         const targetSiteEp = siteEpisodes.find(e => e.episodeNumber === ep) || siteEpisodes[ep - 1];
                         const prefServer = (typeof opts.server === 'string' ? opts.server : 'vidmoly').toLowerCase();
-                        const serverFallbackList = [prefServer, 'vidmoly', 'ruby', 'abyss', 'mirror', 'p2p'].filter((v, i, a) => a.indexOf(v) === i);
+                        const serverFallbackList = [prefServer, 'mirror', 'vidmoly', 'ruby', 'abyss', 'p2p'].filter((v, i, a) => a.indexOf(v) === i);
                         let episodeUploaded = false;
                         let lastEpError = null;
 
@@ -348,10 +335,11 @@ async function main() {
                     await completeAnime({ animeId: anime.id, anilistId: anime.anilist_id });
                     console.log(`\n🎉 [Worker ${opts.workerId}] Anime "${anime.title_english}" (All ${totalEps} Episodes) COMPLETED!`);
                     processedAnime++;
+                    consecutiveErrors = 0;
                 } else {
-                    console.warn(`⚠️ [Worker ${opts.workerId}] Anime "${anime.title_english}" failed to process. Marking as Unavailable so queue continues.`);
-                    sessionFailedAnimeIds.add(animeKey);
-                    await markAnimeUnavailable({ animeId: anime.id, anilistId: anime.anilist_id });
+                    consecutiveErrors++;
+                    console.warn(`⚠️ [Worker ${opts.workerId}] Anime "${anime.title_english}" encountered an error. Retrying same anime in 10s (attempt ${consecutiveErrors})...`);
+                    await new Promise(r => setTimeout(r, 10000));
                     continue;
                 }
             }
