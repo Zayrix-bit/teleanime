@@ -349,9 +349,9 @@ async function main() {
                     console.log(`\n🎉 [Worker ${opts.workerId}] Anime "${anime.title_english}" (All ${totalEps} Episodes) COMPLETED!`);
                     processedAnime++;
                 } else {
-                    console.warn(`⚠️ [Worker ${opts.workerId}] Anime "${anime.title_english}" encountered an error. Releasing back to queue.`);
+                    console.warn(`⚠️ [Worker ${opts.workerId}] Anime "${anime.title_english}" failed to process. Marking as Unavailable so queue continues.`);
                     sessionFailedAnimeIds.add(animeKey);
-                    await releaseAnime({ animeId: anime.id, anilistId: anime.anilist_id });
+                    await markAnimeUnavailable({ animeId: anime.id, anilistId: anime.anilist_id });
                     continue;
                 }
             }
