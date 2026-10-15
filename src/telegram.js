@@ -114,6 +114,7 @@ export async function uploadVideo({
 
     const sent = await client.sendFile(channelEntity, {
         file: filePath,
+        workers: 16,
         caption: caption || `🎬 **${cleanFileName}**\n💾 Size: ${totalSizeMB} MB`,
         attributes: [
             new Api.DocumentAttributeFilename({
