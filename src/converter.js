@@ -235,7 +235,7 @@ export async function convertStreamToMp4({ streamUrl, outputPath, headers = {} }
             const args = [
                 '-y',
                 '-hide_banner',
-                '-loglevel', 'info',
+                '-loglevel', 'warning',
                 '-protocol_whitelist', 'file,http,https,tcp,tls,crypto,data',
                 ...inputArgs,
                 ...mappingArgs,
@@ -245,11 +245,24 @@ export async function convertStreamToMp4({ streamUrl, outputPath, headers = {} }
             ];
 
             const proc = spawn('ffmpeg', args, { stdio: 'inherit' });
+            
+            // 5-minute timeout guard to prevent slow throttled servers from freezing the worker
+            const timer = setTimeout(() => {
+                try {
+                    proc.kill('SIGKILL');
+                } catch {}
+                reject(new Error(`FFmpeg stream conversion timed out (exceeded 5m threshold). Stream server too slow.`));
+            }, 300000);
+
             proc.on('close', code => {
+                clearTimeout(timer);
                 if (code === 0) resolve();
                 else reject(new Error(`FFmpeg exited with error code ${code}`));
             });
-            proc.on('error', reject);
+            proc.on('error', err => {
+                clearTimeout(timer);
+                reject(err);
+            });
         });
     };
 

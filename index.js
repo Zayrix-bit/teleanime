@@ -44,7 +44,7 @@ function parseArgs() {
         completed: false,
         year: null,
         page: 1,
-        server: 'abyss',
+        server: 'vidmoly',
         caption: '',
         channel: '',
         keepLocal: false,
@@ -252,8 +252,8 @@ async function main() {
 
                     try {
                         const targetSiteEp = siteEpisodes.find(e => e.episodeNumber === ep) || siteEpisodes[ep - 1];
-                        const prefServer = (typeof opts.server === 'string' ? opts.server : 'abyss').toLowerCase();
-                        const serverFallbackList = [prefServer, 'abyss', 'vidmoly', 'ruby', 'mirror', 'p2p'].filter((v, i, a) => a.indexOf(v) === i);
+                        const prefServer = (typeof opts.server === 'string' ? opts.server : 'vidmoly').toLowerCase();
+                        const serverFallbackList = [prefServer, 'vidmoly', 'ruby', 'abyss', 'mirror', 'p2p'].filter((v, i, a) => a.indexOf(v) === i);
                         let episodeUploaded = false;
                         let lastEpError = null;
 
