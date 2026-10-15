@@ -80,7 +80,7 @@ export function registerScraper(name, handler) {
  * Main scraper dispatcher.
  * Auto-detects target URL provider or dispatches to registered plugins.
  */
-export async function scrapeStream({ url, site, title = '', query = '', episode = null, server = 'vidmoly', quality = '1080p' } = {}) {
+export async function scrapeStream({ url, site, title = '', query = '', episode = null, server = 'abyss', quality = '1080p' } = {}) {
     console.log(`\n==================================================`);
     console.log(`🔍 RESOLVING STREAM`);
     if (site) console.log(`   Site: ${site}`);

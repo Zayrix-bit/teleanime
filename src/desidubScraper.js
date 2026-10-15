@@ -564,9 +564,9 @@ export async function extractP2PPlayStream(embedUrl) {
  * Extracts playable stream from an episode watch URL with full multi-server fallback.
  * 
  * @param {string} watchUrl - e.g. 'https://www.desidubanime.me/watch/...-episode-20/'
- * @param {string} [preferredServer='vidmoly'] - 'vidmoly', 'mirror', 'abyss', 'p2p'
+ * @param {string} [preferredServer='abyss'] - 'abyss', 'vidmoly', 'mirror', 'p2p'
  */
-export async function extractEpisodeStream(watchUrl, preferredServer = 'vidmoly') {
+export async function extractEpisodeStream(watchUrl, preferredServer = 'abyss') {
     console.log(`\n==================================================`);
     console.log(`🎬 MULTI-SERVER EPISODE EXTRACTION`);
     console.log(`   Watch URL: ${watchUrl}`);
@@ -625,8 +625,8 @@ export async function extractEpisodeStream(watchUrl, preferredServer = 'vidmoly'
     servers.forEach(s => console.log(`   • [${s.name}] -> ${s.embedUrl}`));
 
     // Sort order based on preferredServer
-    const prefStr = (typeof preferredServer === 'string' ? preferredServer : (preferredServer?.server || 'vidmoly')).toLowerCase();
-    const serverKeys = ['vidmoly', 'ruby', 'mirror', 'abyss', 'p2p'];
+    const prefStr = (typeof preferredServer === 'string' ? preferredServer : (preferredServer?.server || 'abyss')).toLowerCase();
+    const serverKeys = ['abyss', 'vidmoly', 'ruby', 'mirror', 'p2p'];
     const orderedKeys = [
         prefStr,
         ...serverKeys.filter(k => k !== prefStr)
