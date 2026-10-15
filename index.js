@@ -171,6 +171,8 @@ async function main() {
         if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
         let processedAnime = 0;
+        const sessionFailedAnimeIds = new Set();
+        let consecutiveSkipped = 0;
 
         try {
             while (processedAnime < opts.maxAnime) {
@@ -183,6 +185,23 @@ async function main() {
                 }
 
                 const anime = claim.anime;
+                const animeKey = String(anime.id || anime.anilist_id || anime.title_english);
+
+                // Anti-deadlock: prevent same worker from re-claiming an anime it already failed
+                if (sessionFailedAnimeIds.has(animeKey)) {
+                    consecutiveSkipped++;
+                    console.log(`⏩ [Worker ${opts.workerId}] Anime "${anime.title_english}" was already attempted in this session. Releasing back.`);
+                    await releaseAnime({ animeId: anime.id, anilistId: anime.anilist_id });
+                    if (consecutiveSkipped >= 5) {
+                        console.log(`⚠️ [Worker ${opts.workerId}] Reached max consecutive skipped claims. All available queue items attempted. Exiting cleanly.`);
+                        break;
+                    }
+                    await new Promise(r => setTimeout(r, 2000));
+                    continue;
+                }
+
+                consecutiveSkipped = 0;
+
                 const episodes = claim.episodes || [];
                 const totalEps = anime.total_episodes || episodes.length;
 
@@ -191,13 +210,13 @@ async function main() {
                 console.log(`   Total Episodes: ${totalEps} | AniList ID: ${anime.anilist_id || 'N/A'}`);
                 console.log(`==================================================\n`);
 
-                // 1. Resolve Anime on DesiDubAnime
+                // 1. Resolve Anime on DesiDubAnime with relevance scoring
                 let matchedSiteAnime = null;
                 const searchCandidates = [anime.title_english, anime.title_romaji].filter(Boolean);
                 for (const cand of searchCandidates) {
                     try {
-                        const res = await searchAnime(cand);
-                        if (res && res.length > 0) {
+                        const res = await searchAnime(cand, anime.title_english);
+                        if (res && res.length > 0 && res[0].score > 0) {
                             matchedSiteAnime = res[0];
                             break;
                         }
@@ -205,7 +224,8 @@ async function main() {
                 }
 
                 if (!matchedSiteAnime) {
-                    console.warn(`⚠️ [Worker ${opts.workerId}] Anime "${anime.title_english}" was not found on DesiDubAnime catalog. Marking Unavailable.`);
+                    console.warn(`⚠️ [Worker ${opts.workerId}] Anime "${anime.title_english}" has no relevant matches on DesiDubAnime catalog. Marking Unavailable.`);
+                    sessionFailedAnimeIds.add(animeKey);
                     await markAnimeUnavailable({ animeId: anime.id, anilistId: anime.anilist_id });
                     continue;
                 }
@@ -232,63 +252,86 @@ async function main() {
 
                     try {
                         const targetSiteEp = siteEpisodes.find(e => e.episodeNumber === ep) || siteEpisodes[ep - 1];
-                        let resolved = null;
-                        if (targetSiteEp && targetSiteEp.url) {
-                            resolved = await extractEpisodeStream(targetSiteEp.url, opts.server || 'vidmoly');
-                        } else {
-                            resolved = await scrapeStream({
-                                site: 'desidub',
-                                query: anime.title_english || anime.title_romaji,
-                                episode: ep,
-                                server: opts.server
-                            });
+                        const prefServer = (typeof opts.server === 'string' ? opts.server : 'vidmoly').toLowerCase();
+                        const serverFallbackList = [prefServer, 'ruby', 'mirror', 'abyss', 'p2p'].filter((v, i, a) => a.indexOf(v) === i);
+                        let episodeUploaded = false;
+                        let lastEpError = null;
+
+                        for (const tryServer of serverFallbackList) {
+                            try {
+                                let resolved = null;
+                                if (targetSiteEp && targetSiteEp.url) {
+                                    resolved = await extractEpisodeStream(targetSiteEp.url, tryServer);
+                                } else {
+                                    resolved = await scrapeStream({
+                                        site: 'desidub',
+                                        query: anime.title_english || anime.title_romaji,
+                                        episode: ep,
+                                        server: tryServer
+                                    });
+                                }
+
+                                const sanitizedTitle = `${anime.title_english}_S1_EP${ep}`.replace(/[^a-zA-Z0-9_\-\.\s]/g, '').trim();
+                                outputPath = path.join(tempDir, `${sanitizedTitle}_${Date.now()}.mp4`);
+
+                                console.log(`▶ Remuxing stream chunks to MP4 using server [${resolved.serverName}]...`);
+                                await convertStreamToMp4({
+                                    streamUrl: resolved.streamUrl,
+                                    outputPath,
+                                    headers: resolved.headers
+                                });
+
+                                const meta = await probeVideo(outputPath);
+                                console.log(`ℹ️ Resolution: ${meta.width}x${meta.height} | Duration: ${meta.duration.toFixed(1)}s | Size: ${meta.sizeMB} MB`);
+
+                                const epTitleStr = (epMeta && epMeta.episode_title) ? ` - ${epMeta.episode_title}` : '';
+                                const caption = [
+                                    `🎬 **${anime.title_english}${epTitleStr}**`,
+                                    `📌 Episode: ${ep} / ${totalEps} (${anime.season})`,
+                                    `🔊 Audio: Hindi Dub (Multi-Audio)`,
+                                    `📐 Resolution: ${meta.width}x${meta.height}`,
+                                    `⏱ Duration: ${Math.floor(meta.duration / 60)}m ${Math.floor(meta.duration % 60)}s`,
+                                    `💾 Size: ${meta.sizeMB} MB`
+                                ].join('\n');
+
+                                const uploadResult = await uploadVideo({
+                                    filePath: outputPath,
+                                    fileName: `${sanitizedTitle}.mp4`,
+                                    caption,
+                                    duration: meta.duration,
+                                    width: meta.width,
+                                    height: meta.height,
+                                    channelId: opts.channel || null
+                                });
+
+                                console.log(`✅ [Worker ${opts.workerId}] [EP ${ep}/${totalEps}] Uploaded! Msg ID: ${uploadResult.messageId}`);
+
+                                await markEpisodeUploaded({
+                                    anilistId: anime.anilist_id,
+                                    title: anime.title_english,
+                                    episodeNumber: ep,
+                                    telegramMessageId: uploadResult.messageId,
+                                    telegramChannelId: String(uploadResult.channelId),
+                                    fileSizeBytes: uploadResult.sizeBytes,
+                                    durationSeconds: Math.round(meta.duration),
+                                    serverUsed: resolved.serverName || tryServer
+                                });
+
+                                episodeUploaded = true;
+                                break; // Successfully uploaded this episode, move to next!
+                            } catch (serverErr) {
+                                console.warn(`[!] Server [${tryServer}] failed for EP ${ep} (${serverErr.message}). Trying fallback server...`);
+                                lastEpError = serverErr;
+                                if (outputPath && fs.existsSync(outputPath) && !opts.keepLocal) {
+                                    try { fs.unlinkSync(outputPath); } catch {}
+                                    outputPath = null;
+                                }
+                            }
                         }
 
-                        const sanitizedTitle = `${anime.title_english}_S1_EP${ep}`.replace(/[^a-zA-Z0-9_\-\.\s]/g, '').trim();
-                        outputPath = path.join(tempDir, `${sanitizedTitle}_${Date.now()}.mp4`);
-
-                        console.log(`▶ Remuxing stream chunks to MP4...`);
-                        await convertStreamToMp4({
-                            streamUrl: resolved.streamUrl,
-                            outputPath,
-                            headers: resolved.headers
-                        });
-
-                        const meta = await probeVideo(outputPath);
-                        console.log(`ℹ️ Resolution: ${meta.width}x${meta.height} | Duration: ${meta.duration.toFixed(1)}s | Size: ${meta.sizeMB} MB`);
-
-                        const epTitleStr = (epMeta && epMeta.episode_title) ? ` - ${epMeta.episode_title}` : '';
-                        const caption = [
-                            `🎬 **${anime.title_english}${epTitleStr}**`,
-                            `📌 Episode: ${ep} / ${totalEps} (${anime.season})`,
-                            `🔊 Audio: Hindi Dub (Multi-Audio)`,
-                            `📐 Resolution: ${meta.width}x${meta.height}`,
-                            `⏱ Duration: ${Math.floor(meta.duration / 60)}m ${Math.floor(meta.duration % 60)}s`,
-                            `💾 Size: ${meta.sizeMB} MB`
-                        ].join('\n');
-
-                        const uploadResult = await uploadVideo({
-                            filePath: outputPath,
-                            fileName: `${sanitizedTitle}.mp4`,
-                            caption,
-                            duration: meta.duration,
-                            width: meta.width,
-                            height: meta.height,
-                            channelId: opts.channel || null
-                        });
-
-                        console.log(`✅ [Worker ${opts.workerId}] [EP ${ep}/${totalEps}] Uploaded! Msg ID: ${uploadResult.messageId}`);
-
-                        await markEpisodeUploaded({
-                            anilistId: anime.anilist_id,
-                            title: anime.title_english,
-                            episodeNumber: ep,
-                            telegramMessageId: uploadResult.messageId,
-                            telegramChannelId: String(uploadResult.channelId),
-                            fileSizeBytes: uploadResult.sizeBytes,
-                            durationSeconds: Math.round(meta.duration),
-                            serverUsed: opts.server || 'vidmoly'
-                        });
+                        if (!episodeUploaded) {
+                            throw lastEpError || new Error(`All available streaming servers failed for EP ${ep}`);
+                        }
 
                     } catch (epErr) {
                         console.error(`❌ [Worker ${opts.workerId}] [EP ${ep}/${totalEps}] Error:`, epErr.message);
@@ -307,6 +350,7 @@ async function main() {
                     processedAnime++;
                 } else {
                     console.warn(`⚠️ [Worker ${opts.workerId}] Anime "${anime.title_english}" encountered an error. Releasing back to queue.`);
+                    sessionFailedAnimeIds.add(animeKey);
                     await releaseAnime({ animeId: anime.id, anilistId: anime.anilist_id });
                     continue;
                 }

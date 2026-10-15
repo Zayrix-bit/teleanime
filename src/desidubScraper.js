@@ -32,26 +32,100 @@ export function getCompletedHindiList({ year = null } = {}) {
     return [];
 }
 
+const STOP_WORDS = new Set(['of', 'the', 'in', 'a', 'an', 'no', 'to', 'and', 'is', 'wa', 'wo', 'ni', 'de', 'ga', 'at', 'for', 'by', 'on', 'with', 'from']);
+
+function normalizeStr(str) {
+    return (str || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+/**
+ * Calculates a relevance score for a search result item against the target query.
+ */
+export function scoreAnimeRelevance(item, query, originalQuery = '', aliasQuery = '') {
+    const titleNorm = normalizeStr(item.title);
+    const slugNorm = normalizeStr(item.slug);
+
+    const targetTerms = [query, originalQuery, aliasQuery].filter(Boolean);
+    const targetNorms = targetTerms.map(normalizeStr);
+
+    let score = 0;
+
+    // Check exact slug or title match against any target term (English, Clean, or Romaji alias)
+    for (const tNorm of targetNorms) {
+        if (!tNorm) continue;
+        if (slugNorm === tNorm) score = Math.max(score, 600);
+        else if (titleNorm === tNorm) score = Math.max(score, 500);
+        else if (slugNorm.startsWith(tNorm)) score = Math.max(score, 300);
+        else if (titleNorm.startsWith(tNorm)) score = Math.max(score, 250);
+    }
+
+    // Collect non-stopword target keywords
+    const targetWords = new Set();
+    for (const tNorm of targetNorms) {
+        tNorm.split(' ').forEach(w => {
+            if (w.length > 2 && !STOP_WORDS.has(w)) targetWords.add(w);
+        });
+    }
+
+    let matchedWords = 0;
+    for (const w of targetWords) {
+        if (slugNorm.includes(w)) {
+            score += 50;
+            matchedWords++;
+        } else if (titleNorm.includes(w)) {
+            score += 40;
+            matchedWords++;
+        }
+    }
+
+    // If there were keywords to match and 0 matched, it's completely irrelevant
+    if (targetWords.size > 0 && matchedWords === 0 && score < 300) {
+        return -999;
+    }
+
+    // Season penalty: if target doesn't ask for S2 / 2nd / part 2 / spin-off, penalize
+    const combinedTarget = targetTerms.join(' ');
+    const isS2Target = /\b(season\s*2|s2|2nd|part\s*2|second|san\s*no\s*shou)\b/i.test(combinedTarget);
+    const itemIsS2 = /\b(season\s*2|sea\s*2|2nd|ni\s*no\s*shou|san\s*no\s*shou|part\s*2)\b/i.test(item.title) 
+        || /-(2|2nd|sea-2|season-2|3rd)/i.test(item.slug);
+
+    if (!isS2Target && itemIsS2) {
+        score -= 200;
+    }
+
+    // Spin-off penalty (e.g. yuuki-no-takarabako, movie, ova)
+    const isSpinOffTarget = /\b(takarabako|treasure|movie|ova|special)\b/i.test(combinedTarget);
+    const itemIsSpinOff = /\b(yuuki\s*no\s*takarabako|movie|ova|special)\b/i.test(item.title + ' ' + item.slug);
+
+    if (!isSpinOffTarget && itemIsSpinOff) {
+        score -= 250;
+    }
+
+    return score;
+}
+
 /**
  * Searches DesiDubAnime for anime matching a keyword.
  * Prioritizes English title first, then known Romaji aliases, then simplified keywords.
  * 
  * @param {string} query - Keyword to search (e.g. 'My Dress-Up Darling', 'solo leveling')
- * @returns {Promise<Array<{ id: number, title: string, slug: string, link: string }>>}
+ * @param {string} [originalQuery=''] - Original anime title if different
+ * @returns {Promise<Array<{ id: number, title: string, slug: string, link: string, score: number }>>}
  */
-export async function searchAnime(query) {
-    console.log(`[*] Searching DesiDubAnime for: "${query}"...`);
+export async function searchAnime(query, originalQuery = '') {
+    const origQuery = originalQuery || query;
+    console.log(`[*] Searching DesiDubAnime for: "${query}" (Target: "${origQuery}")...`);
     
     // Check if there is a known Romaji alias in completed database
     let aliasQuery = null;
     const completedList = getCompletedHindiList();
     const foundEntry = completedList.find(a => 
-        a.title.toLowerCase().includes(query.toLowerCase()) || 
-        query.toLowerCase().includes(a.title.toLowerCase())
+        a.title.toLowerCase().includes(origQuery.toLowerCase()) || 
+        origQuery.toLowerCase().includes(a.title.toLowerCase())
     );
     if (foundEntry && foundEntry.romaji) {
         aliasQuery = foundEntry.romaji;
-        console.log(`[*] Auto-mapped English title "${query}" -> Romaji alias: "${aliasQuery}"`);
+        console.log(`[*] Auto-mapped English title "${origQuery}" -> Romaji alias: "${aliasQuery}"`);
     }
 
     // Candidate queries: English original FIRST, then Romaji alias, then clean title without Season/Cour
@@ -59,6 +133,8 @@ export async function searchAnime(query) {
     const queriesToTry = [query];
     if (aliasQuery && aliasQuery.toLowerCase() !== query.toLowerCase()) queriesToTry.push(aliasQuery);
     if (cleanQuery && cleanQuery.toLowerCase() !== query.toLowerCase() && cleanQuery.length > 2) queriesToTry.push(cleanQuery);
+
+    const allCandidates = new Map();
 
     for (const q of queriesToTry) {
         const apiUrl = `${BASE_URL}/wp-json/wp/v2/anime?search=${encodeURIComponent(q)}&per_page=15`;
@@ -69,37 +145,49 @@ export async function searchAnime(query) {
             if (res.ok) {
                 const data = await res.json();
                 if (data && data.length > 0) {
-                    const mapped = data.map(item => ({
-                        id: item.id,
-                        title: item.title?.rendered?.replace(/&#(\d+);/g, (_, c) => String.fromCharCode(c)).trim() || '',
-                        slug: item.slug,
-                        link: item.link
-                    }));
-
-                    // Smart sort: if query does not specify Season 2, prioritize Season 1
-                    const isSeason2Query = /season\s*2|sea\s*2|\b2nd\b/i.test(q);
-                    mapped.sort((a, b) => {
-                        const aS2 = /season\s*2|sea\s*2|\b2nd\b/i.test(a.title) || a.slug.includes('-2') || a.slug.includes('sea-2');
-                        const bS2 = /season\s*2|sea\s*2|\b2nd\b/i.test(b.title) || b.slug.includes('-2') || b.slug.includes('sea-2');
-                        if (!isSeason2Query) {
-                            if (aS2 && !bS2) return 1;
-                            if (!aS2 && bS2) return -1;
+                    for (const item of data) {
+                        if (!allCandidates.has(item.slug)) {
+                            allCandidates.set(item.slug, {
+                                id: item.id,
+                                title: item.title?.rendered?.replace(/&#(\d+);/g, (_, c) => String.fromCharCode(c)).trim() || '',
+                                slug: item.slug,
+                                link: item.link
+                            });
                         }
-                        return 0;
-                    });
-
-                    return mapped;
+                    }
                 }
             }
         } catch {}
     }
 
-    console.warn(`[!] REST search found no direct match, trying website fallback...`);
-    for (const q of queriesToTry) {
-        const fb = await fallbackSearch(q);
-        if (fb && fb.length > 0) return fb;
+    if (allCandidates.size === 0) {
+        console.warn(`[!] REST search found no direct match, trying website fallback...`);
+        for (const q of queriesToTry) {
+            const fb = await fallbackSearch(q);
+            if (fb && fb.length > 0) {
+                for (const item of fb) {
+                    if (!allCandidates.has(item.slug)) {
+                        allCandidates.set(item.slug, item);
+                    }
+                }
+            }
+        }
     }
-    return [];
+
+    // Score and rank all candidates against query, original title, and alias
+    const scoredList = Array.from(allCandidates.values()).map(item => {
+        const score = scoreAnimeRelevance(item, query, origQuery, aliasQuery);
+        return { ...item, score };
+    }).filter(item => item.score > 0)
+      .sort((a, b) => b.score - a.score);
+
+    if (scoredList.length > 0) {
+        console.log(`[*] Top match: "${scoredList[0].title}" (Slug: ${scoredList[0].slug}, Score: ${scoredList[0].score})`);
+    } else {
+        console.warn(`⚠️ No relevant matches found on DesiDubAnime for: "${query}"`);
+    }
+
+    return scoredList;
 }
 
 /**
@@ -546,6 +634,23 @@ export async function extractEpisodeStream(watchUrl, preferredServer = 'vidmoly'
 
     let lastError = null;
 
+    // Helper to probe stream URL before returning
+    async function probeStream(streamUrl, headers) {
+        try {
+            const probeRes = await fetch(streamUrl, {
+                method: 'GET',
+                headers: {
+                    ...headers,
+                    'Range': 'bytes=0-100'
+                },
+                signal: AbortSignal.timeout(4500)
+            });
+            return probeRes.ok || probeRes.status === 206 || probeRes.status === 200;
+        } catch {
+            return false;
+        }
+    }
+
     // Try extractors in prioritized order
     for (const key of orderedKeys) {
         if (key === 'vidmoly') {
@@ -553,6 +658,12 @@ export async function extractEpisodeStream(watchUrl, preferredServer = 'vidmoly'
             if (s) {
                 try {
                     const result = await extractVidMolyStream(s.embedUrl);
+                    const isPlayable = await probeStream(result.streamUrl, result.headers);
+                    if (!isPlayable) {
+                        console.warn(`[!] VidMoly stream probe failed (unreachable/502). Falling back to next server...`);
+                        lastError = new Error(`VidMoly stream unreachable`);
+                        continue;
+                    }
                     return {
                         title,
                         episodeNumber,
@@ -573,6 +684,12 @@ export async function extractEpisodeStream(watchUrl, preferredServer = 'vidmoly'
             if (s) {
                 try {
                     const result = await extractRubyStream(s.embedUrl);
+                    const isPlayable = await probeStream(result.streamUrl, result.headers);
+                    if (!isPlayable) {
+                        console.warn(`[!] Ruby stream probe failed (unreachable/502). Falling back to next server...`);
+                        lastError = new Error(`Ruby stream unreachable`);
+                        continue;
+                    }
                     return {
                         title,
                         episodeNumber,
@@ -593,6 +710,12 @@ export async function extractEpisodeStream(watchUrl, preferredServer = 'vidmoly'
             if (s) {
                 try {
                     const result = await extractFilesForeverStream(s.embedUrl);
+                    const isPlayable = await probeStream(result.streamUrl, result.headers);
+                    if (!isPlayable) {
+                        console.warn(`[!] FilesForever/Mirror stream probe failed (502 / premilkyway down). Falling back to next server...`);
+                        lastError = new Error(`FilesForever stream unreachable`);
+                        continue;
+                    }
                     return {
                         title,
                         episodeNumber,
@@ -613,6 +736,12 @@ export async function extractEpisodeStream(watchUrl, preferredServer = 'vidmoly'
             if (s) {
                 try {
                     const result = await extractAbyssStream(s.embedUrl);
+                    const isPlayable = await probeStream(result.streamUrl, result.headers);
+                    if (!isPlayable) {
+                        console.warn(`[!] Abyss stream probe failed. Falling back to next server...`);
+                        lastError = new Error(`Abyss stream unreachable`);
+                        continue;
+                    }
                     return {
                         title,
                         episodeNumber,
@@ -633,6 +762,12 @@ export async function extractEpisodeStream(watchUrl, preferredServer = 'vidmoly'
             if (s) {
                 try {
                     const result = await extractP2PPlayStream(s.embedUrl);
+                    const isPlayable = await probeStream(result.streamUrl, result.headers);
+                    if (!isPlayable) {
+                        console.warn(`[!] StreamP2P probe failed. Falling back to next server...`);
+                        lastError = new Error(`StreamP2P unreachable`);
+                        continue;
+                    }
                     return {
                         title,
                         episodeNumber,
