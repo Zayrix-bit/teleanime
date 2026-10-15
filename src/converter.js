@@ -17,21 +17,41 @@ import { promisify } from 'util';
 const execAsync = promisify(exec);
 
 /**
- * Creates an in-memory micro proxy that parses a Master M3U8,
- * extracts all quality variants, locks to the HIGHEST QUALITY (1080p / 720p),
- * preserves all audio tracks (prioritizing Hindi), and serves the optimized playlist.
+/**
+ * Checks whether an EXT-X-MEDIA:TYPE=AUDIO line explicitly represents a Hindi audio track.
+ * Evaluates standard ISO language codes ('hi', 'hin') and name tags ('Hindi', 'हिन्दी').
+ * 
+ * @param {string} line 
+ * @returns {boolean}
+ */
+export function isHindiAudioLine(line) {
+    if (!line || typeof line !== 'string') return false;
+    const nameMatch = line.match(/NAME=["']([^"']+)["']/i);
+    const langMatch = line.match(/LANGUAGE=["']([^"']+)["']/i);
+    const name = nameMatch ? nameMatch[1].trim() : '';
+    const lang = langMatch ? langMatch[1].trim().toLowerCase() : '';
+
+    if (lang === 'hi' || lang === 'hin') return true;
+    if (/hindi|हिन्दी/i.test(name)) return true;
+    return false;
+}
+
+/**
+ * Analyzes an HLS Master Playlist:
+ * - Locks to the HIGHEST resolution video variant (1080p > 900p > 720p > 480p)
+ * - Identifies and isolates ONLY the Pure Hindi audio track (discarding English/Japanese/other audios)
  * 
  * @param {string} masterUrl 
  * @param {Object} headers 
- * @returns {Promise<{ isMaster: boolean, streamUrl: string, topVariant?: Object, variants?: Array, close: () => void }>}
+ * @returns {Promise<{ isMaster: boolean, videoUrl: string, audioUrl: string|null, topVariant?: Object, variants?: Array, close: () => void }>}
  */
 export async function createSmartMasterServer(masterUrl, headers = {}) {
-    console.log(`\n🔍 [SMART QUALITY ENGINE] Analyzing stream: ${masterUrl}`);
+    console.log(`\n🔍 [SMART QUALITY & AUDIO ENGINE] Analyzing stream: ${masterUrl}`);
     
     // Only attempt to parse if it's an HLS playlist URL
     if (!masterUrl.includes('.m3u8') && !masterUrl.includes('hls')) {
         console.log(`[i] Direct media URL detected, proceeding directly.`);
-        return { isMaster: false, streamUrl: masterUrl, close: () => {} };
+        return { isMaster: false, videoUrl: masterUrl, audioUrl: null, close: () => {} };
     }
 
     let content = '';
@@ -39,21 +59,21 @@ export async function createSmartMasterServer(masterUrl, headers = {}) {
         const res = await fetch(masterUrl, { headers });
         if (!res.ok) {
             console.warn(`[!] Master playlist fetch returned ${res.status}, passing URL directly.`);
-            return { isMaster: false, streamUrl: masterUrl, close: () => {} };
+            return { isMaster: false, videoUrl: masterUrl, audioUrl: null, close: () => {} };
         }
         content = await res.text();
     } catch (e) {
         console.warn(`[!] Failed to probe master playlist (${e.message}), passing URL directly.`);
-        return { isMaster: false, streamUrl: masterUrl, close: () => {} };
+        return { isMaster: false, videoUrl: masterUrl, audioUrl: null, close: () => {} };
     }
 
     if (!content.includes('#EXT-X-STREAM-INF')) {
         console.log(`[i] Single variant stream detected (already direct video playlist).`);
-        return { isMaster: false, streamUrl: masterUrl, close: () => {} };
+        return { isMaster: false, videoUrl: masterUrl, audioUrl: null, close: () => {} };
     }
 
     const lines = content.split(/\r?\n/);
-    const audioLines = [];
+    const audioTracks = [];
     const variants = [];
 
     let currentInf = null;
@@ -63,12 +83,19 @@ export async function createSmartMasterServer(masterUrl, headers = {}) {
         if (!line) continue;
 
         if (line.startsWith('#EXT-X-MEDIA:TYPE=AUDIO')) {
-            // Make URI absolute
-            const updatedAudioLine = line.replace(/URI=["']([^"']+)["']/, (m, uri) => {
-                const absUri = new URL(uri, masterUrl).href;
-                return `URI="${absUri}"`;
-            });
-            audioLines.push(updatedAudioLine);
+            const uriMatch = line.match(/URI=["']([^"']+)["']/i);
+            const nameMatch = line.match(/NAME=["']([^"']+)["']/i);
+            const langMatch = line.match(/LANGUAGE=["']([^"']+)["']/i);
+            if (uriMatch) {
+                const absUri = new URL(uriMatch[1], masterUrl).href;
+                audioTracks.push({
+                    line,
+                    uri: absUri,
+                    name: nameMatch ? nameMatch[1] : '',
+                    lang: langMatch ? langMatch[1] : '',
+                    isHindi: isHindiAudioLine(line)
+                });
+            }
         } else if (line.startsWith('#EXT-X-STREAM-INF')) {
             currentInf = line;
         } else if (currentInf) {
@@ -97,7 +124,7 @@ export async function createSmartMasterServer(masterUrl, headers = {}) {
 
     if (variants.length === 0) {
         console.log(`[i] No stream variants found in playlist, using original stream.`);
-        return { isMaster: false, streamUrl: masterUrl, close: () => {} };
+        return { isMaster: false, videoUrl: masterUrl, audioUrl: null, close: () => {} };
     }
 
     // Sort descending: top quality first
@@ -111,54 +138,34 @@ export async function createSmartMasterServer(masterUrl, headers = {}) {
     });
     console.log(`==================================================`);
 
-    // Ensure Hindi audio is prioritized if audio tracks exist
-    const prioritizedAudioLines = [...audioLines].sort((a, b) => {
-        const isAHi = /hi|hindi|हिन्दी/i.test(a);
-        const isBHi = /hi|hindi|हिन्दी/i.test(b);
-        if (isAHi && !isBHi) return -1;
-        if (!isAHi && isBHi) return 1;
-        return 0;
-    });
+    // Pick ONLY the Pure Hindi audio track
+    let hindiAudio = audioTracks.find(t => t.isHindi);
+    if (!hindiAudio && audioTracks.length === 1) {
+        hindiAudio = audioTracks[0];
+    }
 
-    // Reconstruct optimized local master M3U8 locked exclusively to top quality
-    const smartM3u8Content = [
-        '#EXTM3U',
-        '#EXT-X-VERSION:3',
-        ...prioritizedAudioLines,
-        '',
-        `# LOCKED TO TOP QUALITY: ${topVariant.label}`,
-        topVariant.inf,
-        topVariant.uri,
-        ''
-    ].join('\n');
-
-    // Launch ephemeral localhost micro-server to feed FFmpeg
-    const server = http.createServer((req, res) => {
-        res.writeHead(200, {
-            'Content-Type': 'application/vnd.apple.mpegurl',
-            'Access-Control-Allow-Origin': '*'
-        });
-        res.end(smartM3u8Content);
-    });
-
-    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-    const port = server.address().port;
-    const localUrl = `http://127.0.0.1:${port}/smart_master.m3u8`;
+    if (hindiAudio) {
+        console.log(`🎯 [AUDIO ISOLATION] Pure HINDI Audio Locked: "${hindiAudio.name || 'Hindi'}" (${hindiAudio.lang || 'hi'})`);
+    } else if (audioTracks.length > 0) {
+        console.warn(`⚠️ [AUDIO ISOLATION] No track explicitly tagged Hindi among [${audioTracks.map(t=>t.name).join(', ')}]. Defaulting to primary audio.`);
+        hindiAudio = audioTracks[0];
+    } else {
+        console.log(`ℹ️ [AUDIO ISOLATION] Single multiplexed stream detected.`);
+    }
 
     return {
         isMaster: true,
-        streamUrl: localUrl,
+        videoUrl: topVariant.uri,
+        audioUrl: hindiAudio ? hindiAudio.uri : null,
         topVariant,
         variants,
-        close: () => {
-            try { server.close(); } catch {}
-        }
+        close: () => {}
     };
 }
 
 /**
  * Downloads and converts an HLS stream (m3u8), TS chunks, or direct stream into a single MP4.
- * Smartly resolves highest quality stream (1080p) before conversion.
+ * Smartly resolves highest quality stream (1080p) and isolates ONLY Hindi audio before conversion.
  * 
  * @param {Object} options
  * @param {string} options.streamUrl - Direct M3U8, TS, or MP4 URL
@@ -184,28 +191,55 @@ export async function convertStreamToMp4({ streamUrl, outputPath, headers = {} }
             .join('');
     }
 
-    // Smart quality resolution
-    const proxy = await createSmartMasterServer(streamUrl, headers);
-    const activeStreamUrl = proxy.streamUrl;
+    // Smart quality and Hindi audio isolation
+    const streamPlan = await createSmartMasterServer(streamUrl, headers);
+    const videoUrl = streamPlan.videoUrl || streamUrl;
+    const audioUrl = streamPlan.audioUrl || null;
 
     console.log(`\n==================================================`);
     console.log(`🎬 FFMPEG STREAM CONVERSION`);
     console.log(`   Source: ${streamUrl}`);
-    if (proxy.topVariant) {
-        console.log(`   Quality: 🏆 ${proxy.topVariant.label}`);
+    if (streamPlan.topVariant) {
+        console.log(`   Quality: 🏆 ${streamPlan.topVariant.label}`);
+    }
+    if (audioUrl) {
+        console.log(`   Audio Track: 🇮🇳 100% PURE HINDI AUDIO ONLY (Isolated)`);
+    } else {
+        console.log(`   Audio Track: 🇮🇳 Stream default audio track`);
     }
     console.log(`   Output: ${outputPath}`);
     console.log(`==================================================`);
 
     const runFfmpeg = (extraArgs = []) => {
         return new Promise((resolve, reject) => {
+            const inputArgs = [];
+            if (headerStr) inputArgs.push('-headers', headerStr);
+            inputArgs.push('-i', videoUrl);
+
+            if (audioUrl) {
+                if (headerStr) inputArgs.push('-headers', headerStr);
+                inputArgs.push('-i', audioUrl);
+            }
+
+            // If separate Hindi audio is available, map video from input 0 and Hindi audio from input 1
+            // This completely drops any non-Hindi audio multiplexed into input 0!
+            const mappingArgs = audioUrl
+                ? ['-map', '0:v:0', '-map', '1:a:0']
+                : ['-map', '0:v:0', '-map', '0:a:0?'];
+
+            const metadataArgs = [
+                '-metadata:s:a:0', 'language=hin',
+                '-metadata:s:a:0', 'title=Hindi'
+            ];
+
             const args = [
                 '-y',
                 '-hide_banner',
                 '-loglevel', 'info',
                 '-protocol_whitelist', 'file,http,https,tcp,tls,crypto,data',
-                ...(headerStr ? ['-headers', headerStr] : []),
-                '-i', activeStreamUrl,
+                ...inputArgs,
+                ...mappingArgs,
+                ...metadataArgs,
                 ...extraArgs,
                 outputPath
             ];
@@ -222,10 +256,8 @@ export async function convertStreamToMp4({ streamUrl, outputPath, headers = {} }
     const startTime = Date.now();
 
     try {
-        console.log(`[*] Executing lossless remux (-c copy + multi-audio)...`);
+        console.log(`[*] Executing lossless remux (-c copy + Hindi audio isolation)...`);
         await runFfmpeg([
-            '-map', '0:v:0',
-            '-map', '0:a?',
             '-c', 'copy',
             '-bsf:a', 'aac_adtstoasc',
             '-movflags', '+faststart'
@@ -234,19 +266,17 @@ export async function convertStreamToMp4({ streamUrl, outputPath, headers = {} }
         console.warn(`[!] Primary remux failed (${err.message}). Retrying with audio re-encode...`);
         try {
             await runFfmpeg([
-                '-map', '0:v:0',
-                '-map', '0:a?',
                 '-c:v', 'copy',
                 '-c:a', 'aac',
                 '-b:a', '128k',
                 '-movflags', '+faststart'
             ]);
         } catch (fallbackErr) {
-            proxy.close();
+            streamPlan.close?.();
             throw fallbackErr;
         }
     } finally {
-        proxy.close();
+        streamPlan.close?.();
     }
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
