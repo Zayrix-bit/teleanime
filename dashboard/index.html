@@ -1107,29 +1107,105 @@
   }
 
   function updateActiveHero(stats) {
-    if (stats.active_workers && stats.active_workers.length > 0) {
-      const active = stats.active_workers[0];
-      document.getElementById('activeAnimeTitle').innerText = active.title_english || active.title_romaji || 'Unknown Title';
-      document.getElementById('activeAnimeSub').innerText = `${active.season || 'S1'} · ${active.title_romaji || ''} · Claimed by: ${active.claimed_by || 'vps-worker-1'}`;
-      
+    const workers = stats.active_workers || [];
+    
+    // Update top worker status badge
+    const badgeText = document.getElementById('workerStatusText');
+    if (badgeText) {
+      badgeText.innerText = workers.length > 0 
+        ? `${workers.length} Parallel Workers Active`
+        : 'Workers Idle';
+    }
+
+    const heroContent = document.querySelector('.hero-content');
+    if (!heroContent) return;
+
+    if (workers.length === 0) {
+      heroContent.innerHTML = `
+        <div>
+          <div class="active-anime-title">Queue Waiting / Scanning...</div>
+          <div class="active-anime-sub">Workers are checking for next pending batch.</div>
+        </div>
+      `;
+      return;
+    }
+
+    if (workers.length > 1) {
+      heroContent.style.display = 'grid';
+      heroContent.style.gridTemplateColumns = `repeat(auto-fit, minmax(280px, 1fr))`;
+      heroContent.style.gap = '18px';
+      heroContent.innerHTML = workers.map(w => {
+        const up = w.uploaded_episodes || 0;
+        const tot = w.total_episodes || 1;
+        const pct = Math.round((up / tot) * 100);
+        return `
+          <div style="background: rgba(0,0,0,0.4); border: 1px solid var(--border-cyan); border-radius: var(--radius-md); padding: 18px; display: flex; flex-direction: column; justify-content: space-between; box-shadow: 0 4px 20px rgba(0,0,0,0.3);">
+            <div>
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <span style="background: linear-gradient(135deg, var(--cyan), var(--indigo)); color: #000; font-size: 10px; font-weight: 800; padding: 2px 8px; border-radius: var(--radius-full); text-transform: uppercase;">
+                  ⚡ ${escapeHtml(w.claimed_by || 'worker')}
+                </span>
+                <span style="font-size: 11px; color: var(--text-dim); font-weight: 600;">${w.year || '2023'} · ${w.season || 'S1'}</span>
+              </div>
+              <h3 style="font-size: 15px; font-weight: 700; color: #FFF; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${escapeHtml(w.title_english || w.title_romaji || '')}">
+                ${escapeHtml(w.title_english || w.title_romaji || 'Untitled')}
+              </h3>
+              <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                ${escapeHtml(w.title_romaji || '')}
+              </div>
+            </div>
+            <div>
+              <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 5px; font-weight: 600;">
+                <span>Episodes: <strong>${up} / ${tot}</strong></span>
+                <span style="color: var(--cyan);">${pct}%</span>
+              </div>
+              <div class="progress-bar-bg" style="height: 6px;">
+                <div class="progress-bar-fill" style="width: ${pct}%;"></div>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    } else {
+      const active = workers[0];
       const uploaded = active.uploaded_episodes || 0;
       const total = active.total_episodes || 1;
       const pct = Math.round((uploaded / total) * 100);
-      
-      document.getElementById('activeProgressBar').style.width = `${pct}%`;
-      document.getElementById('activeEpisodeStatus').innerText = `Episodes: ${uploaded} / ${total}`;
-      document.getElementById('activeProgressPct').innerText = `${pct}% Complete`;
-      
-      document.getElementById('metricWorkerId').innerText = active.claimed_by || 'vps-worker-1';
-      document.getElementById('metricYear').innerText = active.year || '2023';
-      document.getElementById('metricAnilistId').innerText = `#${active.anilist_id || '--'}`;
-      document.getElementById('metricStatus').innerText = 'In-Progress';
-    } else {
-      document.getElementById('activeAnimeTitle').innerText = 'Queue Waiting / Scanning...';
-      document.getElementById('activeAnimeSub').innerText = 'Worker is checking for next pending batch.';
-      document.getElementById('activeProgressBar').style.width = '0%';
-      document.getElementById('activeEpisodeStatus').innerText = 'Idle';
-      document.getElementById('activeProgressPct').innerText = '--';
+      heroContent.style.display = 'grid';
+      heroContent.style.gridTemplateColumns = '2fr 1fr';
+      heroContent.innerHTML = `
+        <div>
+          <div class="active-anime-title">${escapeHtml(active.title_english || active.title_romaji || 'Unknown Title')}</div>
+          <div class="active-anime-sub">${active.season || 'S1'} · ${escapeHtml(active.title_romaji || '')} · Claimed by: ${active.claimed_by || 'vps-worker-1'}</div>
+          <div class="live-progress-container">
+            <div class="progress-bar-bg">
+              <div class="progress-bar-fill" style="width: ${pct}%;"></div>
+            </div>
+            <div class="progress-stats-row">
+              <span>Episodes: ${uploaded} / ${total}</span>
+              <span style="color: var(--cyan);">${pct}% Complete</span>
+            </div>
+          </div>
+        </div>
+        <div class="hero-metrics-box">
+          <div class="metric-sub-item">
+            <span class="metric-sub-label">Worker ID</span>
+            <span class="metric-sub-val">${active.claimed_by || 'vps-worker-1'}</span>
+          </div>
+          <div class="metric-sub-item">
+            <span class="metric-sub-label">Release Year</span>
+            <span class="metric-sub-val">${active.year || '2023'}</span>
+          </div>
+          <div class="metric-sub-item">
+            <span class="metric-sub-label">AniList ID</span>
+            <span class="metric-sub-val">#${active.anilist_id || '--'}</span>
+          </div>
+          <div class="metric-sub-item">
+            <span class="metric-sub-label">Status</span>
+            <span class="metric-sub-val" style="color: var(--cyan);">In-Progress</span>
+          </div>
+        </div>
+      `;
     }
   }
 
