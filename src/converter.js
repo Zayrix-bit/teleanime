@@ -141,14 +141,29 @@ export async function createSmartMasterServer(masterUrl, headers = {}) {
     // Pick ONLY the Pure Hindi audio track
     let hindiAudio = audioTracks.find(t => t.isHindi);
     if (!hindiAudio && audioTracks.length === 1) {
-        hindiAudio = audioTracks[0];
+        const nonHindiLangs = ['en', 'eng', 'ja', 'jpn', 'te', 'tel', 'ta', 'tam', 'ko', 'kor', 'zh', 'chi'];
+        const isExplicitNonHindi = nonHindiLangs.includes(audioTracks[0].lang) ||
+            /english|japanese|telugu|tamil|korean|chinese/i.test(audioTracks[0].name);
+        if (!isExplicitNonHindi) {
+            hindiAudio = audioTracks[0];
+        }
     }
 
     if (hindiAudio) {
+        // Double-check if the Hindi audio URI is actually reachable on the server (not 403/404)
+        try {
+            const aCheck = await fetch(hindiAudio.uri, { headers, signal: AbortSignal.timeout(3000) });
+            if (!aCheck.ok) {
+                console.warn(`❌ [AUDIO LOCK ERROR] Hindi audio track returned HTTP ${aCheck.status} (ghost file on CDN)!`);
+                throw new Error(`Hindi audio track returned HTTP ${aCheck.status} (unreachable on server). Aborting non-Hindi remux.`);
+            }
+        } catch (err) {
+            if (err.message.includes('Aborting non-Hindi remux')) throw err;
+        }
         console.log(`🎯 [AUDIO ISOLATION] Pure HINDI Audio Locked: "${hindiAudio.name || 'Hindi'}" (${hindiAudio.lang || 'hi'})`);
     } else if (audioTracks.length > 0) {
-        console.warn(`⚠️ [AUDIO ISOLATION] No track explicitly tagged Hindi among [${audioTracks.map(t=>t.name).join(', ')}]. Defaulting to primary audio.`);
-        hindiAudio = audioTracks[0];
+        console.warn(`❌ [AUDIO LOCK ERROR] Multi-audio stream contains [${audioTracks.map(t=>t.name || t.lang).join(', ')}] but NO Hindi audio track! Rejecting to enforce 100% Pure Hindi.`);
+        throw new Error(`Stream has no Hindi audio track (${audioTracks.map(t=>t.name || t.lang).join(', ')}). Aborting non-Hindi remux.`);
     } else {
         console.log(`ℹ️ [AUDIO ISOLATION] Single multiplexed stream detected.`);
     }
@@ -202,7 +217,8 @@ async function convertDirectMediaToMp4({ streamUrl, outputPath, headers = {} }) 
             if (s.codec_type === 'audio') {
                 if (defaultAudioIdx === null) defaultAudioIdx = s.index;
                 const lang = (s.tags?.language || '').toLowerCase();
-                if (lang === 'hin' || lang === 'hi' || lang === 'hindi') {
+                const title = (s.tags?.title || s.tags?.handler_name || '').toLowerCase();
+                if (lang === 'hin' || lang === 'hi' || lang === 'hindi' || title.includes('hindi') || title.includes('हिन्दी')) {
                     hindiIdx = s.index;
                 }
             }
@@ -241,7 +257,7 @@ async function convertDirectMediaToMp4({ streamUrl, outputPath, headers = {} }) 
  * @param {Object} [options.headers] - Custom HTTP headers (Referer, User-Agent, etc.)
  * @returns {Promise<string>} Path to finished MP4
  */
-export async function convertStreamToMp4({ streamUrl, outputPath, headers = {} }) {
+export async function convertStreamToMp4({ streamUrl, outputPath, headers = {}, overrideAudioUrl = null }) {
     const outputDir = path.dirname(outputPath);
     if (!fs.existsSync(outputDir)) {
         fs.mkdirSync(outputDir, { recursive: true });
@@ -267,7 +283,7 @@ export async function convertStreamToMp4({ streamUrl, outputPath, headers = {} }
     // Smart quality and Hindi audio isolation
     const streamPlan = await createSmartMasterServer(streamUrl, headers);
     const videoUrl = streamPlan.videoUrl || streamUrl;
-    const audioUrl = streamPlan.audioUrl || null;
+    const audioUrl = overrideAudioUrl || streamPlan.audioUrl || null;
 
     console.log(`\n==================================================`);
     console.log(`🎬 FFMPEG STREAM CONVERSION`);
@@ -287,24 +303,26 @@ export async function convertStreamToMp4({ streamUrl, outputPath, headers = {} }
         return new Promise((resolve, reject) => {
             const inputArgs = [];
             // Universal HLS support for .jpg / .txt / disguised stream segments
-            inputArgs.push('-allowed_extensions', 'ALL');
+            if (videoUrl.includes('.jpg') || videoUrl.includes('.txt') || videoUrl.includes('.m3u8')) {
+                inputArgs.push('-f', 'hls', '-allowed_extensions', 'ALL', '-allowed_segment_extensions', 'ALL');
+            } else {
+                inputArgs.push('-allowed_extensions', 'ALL', '-allowed_segment_extensions', 'ALL');
+            }
 
             if (headerStr) inputArgs.push('-headers', headerStr);
             if (audioUrl) inputArgs.push('-copyts');
             inputArgs.push('-thread_queue_size', '512');
-            if (videoUrl.includes('.jpg') || videoUrl.includes('.txt')) {
-                inputArgs.push('-f', 'hls');
-            }
             inputArgs.push('-i', videoUrl);
 
             if (audioUrl) {
-                inputArgs.push('-allowed_extensions', 'ALL');
+                if (audioUrl.includes('.jpg') || audioUrl.includes('.txt') || audioUrl.includes('.m3u8')) {
+                    inputArgs.push('-f', 'hls', '-allowed_extensions', 'ALL', '-allowed_segment_extensions', 'ALL');
+                } else {
+                    inputArgs.push('-allowed_extensions', 'ALL', '-allowed_segment_extensions', 'ALL');
+                }
                 if (headerStr) inputArgs.push('-headers', headerStr);
                 inputArgs.push('-copyts');
                 inputArgs.push('-thread_queue_size', '512');
-                if (audioUrl.includes('.jpg') || audioUrl.includes('.txt')) {
-                    inputArgs.push('-f', 'hls');
-                }
                 inputArgs.push('-i', audioUrl);
             }
 

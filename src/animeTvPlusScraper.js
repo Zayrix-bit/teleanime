@@ -14,16 +14,25 @@ const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 
 /**
  * Checks whether an EXT-X-MEDIA:TYPE=AUDIO line explicitly represents a Hindi audio track.
+ * Strictly rejects any non-Hindi tracks (Japanese, English, Telugu, Tamil, etc.).
  */
 export function isHindiAudio(line) {
     if (!line || typeof line !== 'string') return false;
     const nameMatch = line.match(/NAME=["']([^"']+)["']/i);
     const langMatch = line.match(/LANGUAGE=["']([^"']+)["']/i);
+    const groupMatch = line.match(/GROUP-ID=["']([^"']+)["']/i);
+
     const name = nameMatch ? nameMatch[1].trim() : '';
     const lang = langMatch ? langMatch[1].trim().toLowerCase() : '';
+    const group = groupMatch ? groupMatch[1].trim().toLowerCase() : '';
 
+    // Direct language codes for Hindi
     if (lang === 'hi' || lang === 'hin') return true;
-    if (/hindi|हिन्दी/i.test(name)) return true;
+
+    // Direct name or group matches for Hindi / हिन्दी
+    if (/hindi|हिन्दी/i.test(name) || /hindi|hin/i.test(group)) return true;
+
+    // Explicitly reject any other known languages (en, ja, te, ta, ko, etc.)
     return false;
 }
 
@@ -46,7 +55,29 @@ export async function getMalIdFromAniList(anilistId) {
 }
 
 /**
+ * Resolves MyAnimeList ID from Anime Title using AniList GraphQL.
+ */
+export async function resolveMalIdFromTitle(title) {
+    if (!title) return null;
+    try {
+        const query = `query ($search: String) { Media(search: $search, type: ANIME) { id idMal title { english romaji } } }`;
+        const res = await fetch('https://graphql.anilist.co', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            body: JSON.stringify({ query, variables: { search: title } }),
+            signal: AbortSignal.timeout(5000)
+        });
+        if (res.ok) {
+            const data = await res.json();
+            return data?.data?.Media?.idMal ? Number(data.data.Media.idMal) : null;
+        }
+    } catch {}
+    return null;
+}
+
+/**
  * Attempts to extract a 1080p stream with pure Hindi audio from AnimeTVPlus.
+ * Strictly validates Hindi audio track existence and reachability before returning.
  * 
  * @param {Object} params
  * @param {number} [params.malId] - MyAnimeList ID
@@ -88,10 +119,10 @@ export async function extractAnimeTvPlusStream({ malId, anilistId, episodeNumber
             return null;
         }
 
-        const streamUrl = data.m3u8;
+        const masterUrl = data.m3u8;
 
-        // Fetch master playlist to verify Hindi audio presence
-        const masterRes = await fetch(streamUrl, { headers, signal: AbortSignal.timeout(7000) });
+        // Fetch master playlist to verify Hindi audio presence and locate top video variant
+        const masterRes = await fetch(masterUrl, { headers, signal: AbortSignal.timeout(7000) });
         if (!masterRes.ok) {
             console.log(`[i] [AnimeTVPlus] Failed to fetch master playlist (${masterRes.status})`);
             return null;
@@ -104,11 +135,12 @@ export async function extractAnimeTvPlusStream({ malId, anilistId, episodeNumber
         let hindiTrackUri = '';
         let hindiTrackName = '';
 
+        // Extract Pure Hindi Audio Track
         for (const line of lines) {
             if (line.startsWith('#EXT-X-MEDIA:TYPE=AUDIO') && isHindiAudio(line)) {
                 const uMatch = line.match(/URI=["']([^"']+)["']/i);
                 if (uMatch) {
-                    hindiTrackUri = new URL(uMatch[1], streamUrl).href;
+                    hindiTrackUri = new URL(uMatch[1], masterUrl).href;
                     hasHindi = true;
                     const m = line.match(/NAME=["']([^"']+)["']/i);
                     hindiTrackName = m ? m[1] : 'हिन्दी';
@@ -117,12 +149,13 @@ export async function extractAnimeTvPlusStream({ malId, anilistId, episodeNumber
             }
         }
 
+        // STRICT REQUIREMENT: If no Hindi audio track exists, SKIP AnimeTVPlus entirely
         if (!hasHindi || !hindiTrackUri) {
-            console.log(`[i] [AnimeTVPlus] Stream exists but no Hindi audio track found. Skipping.`);
+            console.log(`[i] [AnimeTVPlus] Stream exists for MAL ${targetMal} EP ${ep} but NO Hindi audio track found. Skipping to DesiDub fallback.`);
             return null;
         }
 
-        // CRITICAL CHECK: Verify that the Hindi audio playlist is actually reachable (not 403 / 404)
+        // CRITICAL CHECK: Verify that the Hindi audio playlist is actually reachable (not 403 / 404 ghost file)
         try {
             const audioCheck = await fetch(hindiTrackUri, {
                 headers,
@@ -133,15 +166,35 @@ export async function extractAnimeTvPlusStream({ malId, anilistId, episodeNumber
                 return null;
             }
         } catch (audioErr) {
-            console.log(`[i] [AnimeTVPlus] Failed to reach Hindi audio track (${audioErr.message}). Falling back.`);
+            console.log(`[i] [AnimeTVPlus] Failed to reach Hindi audio track (${audioErr.message}). Falling back to DesiDub.`);
             return null;
         }
 
-        // Detect resolution
+        // Locate highest resolution video variant URL directly
+        let bestVideoUri = masterUrl;
+        let highestQualityScore = -1;
         let resolution = '1080p';
-        const resMatch = masterContent.match(/RESOLUTION=(\d+)x(\d+)/i);
-        if (resMatch) {
-            resolution = `${resMatch[2]}p (${resMatch[1]}x${resMatch[2]})`;
+
+        let curInf = null;
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (trimmed.startsWith('#EXT-X-STREAM-INF')) {
+                curInf = trimmed;
+            } else if (curInf && trimmed && !trimmed.startsWith('#')) {
+                const varUri = new URL(trimmed, masterUrl).href;
+                const resM = curInf.match(/RESOLUTION=(\d+)x(\d+)/i);
+                const bwM = curInf.match(/BANDWIDTH=(\d+)/i);
+                const w = resM ? parseInt(resM[1], 10) : 0;
+                const h = resM ? parseInt(resM[2], 10) : 0;
+                const bw = bwM ? parseInt(bwM[1], 10) : 0;
+                const score = (w * h * 10) + Math.round(bw / 1000);
+                if (score > highestQualityScore) {
+                    highestQualityScore = score;
+                    bestVideoUri = varUri;
+                    if (h) resolution = `${h}p (${w}x${h})`;
+                }
+                curInf = null;
+            }
         }
 
         console.log(`✅ [AnimeTVPlus] 1080p Hindi Dub Stream Verified! (${resolution} | Audio: "${hindiTrackName}")`);
@@ -149,7 +202,9 @@ export async function extractAnimeTvPlusStream({ malId, anilistId, episodeNumber
         return {
             success: true,
             serverName: 'AnimeTVPlus',
-            streamUrl,
+            streamUrl: bestVideoUri, // Point directly to top video variant so FFmpeg avoids parsing master.txt
+            masterUrl,
+            hindiAudioUrl: hindiTrackUri,
             headers,
             quality: resolution,
             hasHindiAudio: true,

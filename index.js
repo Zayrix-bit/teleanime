@@ -89,6 +89,27 @@ function parseArgs() {
     return opts;
 }
 
+/**
+ * Resolves MyAnimeList ID from Anime Title using AniList GraphQL.
+ */
+async function resolveMalIdFromTitle(title) {
+    if (!title) return null;
+    try {
+        const query = `query ($search: String) { Media(search: $search, type: ANIME) { id idMal title { english romaji } } }`;
+        const res = await fetch('https://graphql.anilist.co', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            body: JSON.stringify({ query, variables: { search: title } }),
+            signal: AbortSignal.timeout(5000)
+        });
+        if (res.ok) {
+            const data = await res.json();
+            return data?.data?.Media?.idMal ? Number(data.data.Media.idMal) : null;
+        }
+    } catch {}
+    return null;
+}
+
 async function main() {
     const opts = parseArgs();
 
@@ -208,6 +229,13 @@ async function main() {
                         console.log(`[*] [Worker ${opts.workerId}] Auto-mapped AniList ID ${anime.anilist_id} -> MAL ID ${targetMalId}`);
                     }
                 }
+                if (!targetMalId) {
+                    targetMalId = await resolveMalIdFromTitle(anime.title_english || anime.title_romaji);
+                    if (targetMalId) {
+                        anime.mal_id = targetMalId;
+                        console.log(`[*] [Worker ${opts.workerId}] Auto-mapped Title "${anime.title_english}" -> MAL ID ${targetMalId}`);
+                    }
+                }
 
                 // 2. Pre-match DesiDubAnime in the background for reliable fallback
                 let matchedSiteAnime = null;
@@ -288,7 +316,8 @@ async function main() {
                                 await convertStreamToMp4({
                                     streamUrl: resolved.streamUrl,
                                     outputPath,
-                                    headers: resolved.headers
+                                    headers: resolved.headers,
+                                    overrideAudioUrl: resolved.hindiAudioUrl || null
                                 });
 
                                 const meta = await probeVideo(outputPath);
@@ -536,26 +565,50 @@ Options:
             console.log(`──────────────────────────────────────────────────`);
 
             try {
-                // STEP 1: RESOLVE STREAM URL
-                const resolved = await scrapeStream({
-                    url: opts.url,
-                    site: opts.site || (opts.anime ? 'desidub' : ''),
-                    query: opts.anime,
-                    title: opts.title,
-                    episode: currentEp,
-                    server: opts.server
-                });
+                // STEP 1: RESOLVE STREAM URL (Tier 1: AnimeTVPlus 1st try -> Tier 2: DesiDubAnime fallback)
+                let resolved = null;
+                let manualMalId = null;
+
+                if (opts.anime && !opts.site && !opts.url) {
+                    try {
+                        console.log(`🚀 [Tier 1 Default] Querying AnimeTVPlus for "${opts.anime}" EP ${currentEp}...`);
+                        manualMalId = await resolveMalIdFromTitle(opts.anime);
+                        if (manualMalId) {
+                            resolved = await extractAnimeTvPlusStream({
+                                malId: manualMalId,
+                                episodeNumber: currentEp
+                            });
+                        }
+                    } catch (atvErr) {
+                        console.log(`[i] AnimeTVPlus probe notice: ${atvErr.message}`);
+                    }
+                }
+
+                if (!resolved) {
+                    if (opts.anime && !opts.site && !opts.url) {
+                        console.log(`ℹ️ [Tier 2 Fallback] Switching to DesiDubAnime for EP ${currentEp}...`);
+                    }
+                    resolved = await scrapeStream({
+                        url: opts.url,
+                        site: opts.site || (opts.anime ? 'desidub' : ''),
+                        query: opts.anime,
+                        title: opts.title,
+                        episode: currentEp,
+                        server: opts.server
+                    });
+                }
 
                 const videoTitle = opts.title || resolved.title || `Anime_EP_${currentEp}_${Date.now()}`;
                 const sanitizedTitle = videoTitle.replace(/[^a-zA-Z0-9_\-\.\s]/g, '').trim();
                 outputPath = path.join(tempDir, `${sanitizedTitle || 'stream_video'}_${Date.now()}.mp4`);
 
-                // STEP 2: CONVERT / REMUX STREAM CHUNKS TO MP4
-                console.log(`▶ [Episode ${currentEp}/${endEp}] Remuxing stream to MP4...`);
+                // STEP 2: CONVERT / REMUX STREAM CHUNKS TO MP4 (Pure Hindi audio strictly locked)
+                console.log(`▶ [Episode ${currentEp}/${endEp}] Remuxing stream to MP4 (Pure Hindi audio locked)...`);
                 await convertStreamToMp4({
                     streamUrl: resolved.streamUrl,
                     outputPath,
-                    headers: resolved.headers
+                    headers: resolved.headers,
+                    overrideAudioUrl: resolved.hindiAudioUrl || null
                 });
 
                 // STEP 3: PROBE VIDEO METADATA

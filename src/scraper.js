@@ -4,7 +4,7 @@
  */
 
 import { searchAnime, getAnimeEpisodes, extractEpisodeStream } from './desidubScraper.js';
-import { extractAnimeTvPlusStream, getMalIdFromAniList } from './animeTvPlusScraper.js';
+import { extractAnimeTvPlusStream, getMalIdFromAniList, resolveMalIdFromTitle } from './animeTvPlusScraper.js';
 
 // Registry of site-specific scraper handlers
 const siteScrapers = {
@@ -94,6 +94,7 @@ export function registerScraper(name, handler) {
 /**
  * Main scraper dispatcher.
  * Auto-detects target URL provider or dispatches to registered plugins.
+ * By default: Tier 1 tries AnimeTVPlus (with strict Hindi lock). If it fails -> Tier 2 falls back to DesiDubAnime.
  */
 export async function scrapeStream({ url, site, title = '', query = '', episode = null, server = 'vidmoly', quality = '1080p' } = {}) {
     console.log(`\n==================================================`);
@@ -141,6 +142,28 @@ export async function scrapeStream({ url, site, title = '', query = '', episode 
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             }
         };
+    }
+
+    // Default flow: TIER 1 AnimeTVPlus 1st Try -> TIER 2 DesiDubAnime Fallback
+    const searchTerm = query || title;
+    if (searchTerm) {
+        const targetEp = episode ? parseInt(episode, 10) : 1;
+        try {
+            console.log(`🚀 [Tier 1 Default] Probing AnimeTVPlus for "${searchTerm}" EP ${targetEp}...`);
+            const malId = await resolveMalIdFromTitle(searchTerm);
+            if (malId) {
+                const atvStream = await extractAnimeTvPlusStream({ malId, episodeNumber: targetEp });
+                if (atvStream && atvStream.hasHindiAudio) {
+                    console.log(`👑 [Tier 1 Success] AnimeTVPlus stream verified with Pure Hindi audio!`);
+                    return atvStream;
+                }
+            }
+        } catch (e) {
+            console.log(`[i] AnimeTVPlus probe notice: ${e.message}`);
+        }
+
+        console.log(`ℹ️ [Tier 2 Fallback] Switching to DesiDubAnime for "${searchTerm}" EP ${targetEp}...`);
+        return await siteScrapers['desidub']({ url, episode: targetEp, title, query: searchTerm, server });
     }
 
     throw new Error("No URL or site scraper specified. Provide --url <link> or --site desidub --query <name>.");
