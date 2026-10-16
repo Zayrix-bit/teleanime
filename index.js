@@ -31,6 +31,7 @@ import { uploadVideo, closeTelegram } from './src/telegram.js';
 import { searchAnime, getAnimeEpisodes, extractEpisodeStream, getCatalog, getCompletedHindiList } from './src/desidubScraper.js';
 import { extractAnimeTvPlusStream, getMalIdFromAniList } from './src/animeTvPlusScraper.js';
 import { markEpisodeUploaded, getVpsHindiAnimeList, getVpsHindiEpisodes, claimNextAnime, completeAnime, releaseAnime, markAnimeUnavailable, resetQueue } from './src/vpsTracker.js';
+import { ANSI, colorByProvider, logAnimeTv, logAnimeTvBold, logDesiAnime, logDesiAnimeBold, logThemed } from './src/logger.js';
 
 dotenv.config();
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
@@ -304,24 +305,25 @@ async function main() {
                                 const sanitizedTitle = `${anime.title_english}_S1_EP${ep}`.replace(/[^a-zA-Z0-9_\-\.\s]/g, '').trim();
                                 outputPath = path.join(tempDir, `${sanitizedTitle}_${Date.now()}.mp4`);
 
-                                console.log(`\n==================================================`);
-                                console.log(`💎 [ACTIVE SCRAPER PROVIDER: AnimeTVPlus]`);
-                                console.log(`   👑 Provider: AnimeTVPlus (Direct 1080p Stream)`);
-                                console.log(`   ⚡ Server: ${resolved.serverName || 'AnimeTV+'}`);
-                                console.log(`   🎬 Target Ep: Episode ${ep}/${totalEps}`);
-                                console.log(`   🔊 Audio: 🇮🇳 Hindi Dub (Multi-Audio Isolated)`);
-                                console.log(`==================================================\n`);
+                                logAnimeTvBold(`\n==================================================`);
+                                logAnimeTvBold(`🟧 [ACTIVE SCRAPER PROVIDER: AnimeTVPlus]`);
+                                logAnimeTvBold(`   👑 Provider: AnimeTVPlus (Direct 1080p Stream)`);
+                                logAnimeTvBold(`   ⚡ Server: ${resolved.serverName || 'AnimeTV+'}`);
+                                logAnimeTvBold(`   🎬 Target Ep: Episode ${ep}/${totalEps}`);
+                                logAnimeTvBold(`   🔊 Audio: 🇮🇳 Hindi Dub (Multi-Audio Isolated)`);
+                                logAnimeTvBold(`==================================================\n`);
 
-                                console.log(`▶ Remuxing stream chunks to MP4 using provider [AnimeTVPlus] (1080p Pure Hindi)...`);
+                                logAnimeTv(`▶ Remuxing stream chunks to MP4 using provider [AnimeTVPlus] (1080p Pure Hindi)...`);
                                 await convertStreamToMp4({
                                     streamUrl: resolved.streamUrl,
                                     outputPath,
                                     headers: resolved.headers,
-                                    overrideAudioUrl: resolved.hindiAudioUrl || null
+                                    overrideAudioUrl: resolved.hindiAudioUrl || null,
+                                    provider: 'AnimeTVPlus'
                                 });
 
                                 const meta = await probeVideo(outputPath);
-                                console.log(`ℹ️ Resolution: ${meta.width}x${meta.height} | Duration: ${meta.duration.toFixed(1)}s | Size: ${meta.sizeMB} MB`);
+                                logAnimeTv(`ℹ️ Resolution: ${meta.width}x${meta.height} | Duration: ${meta.duration.toFixed(1)}s | Size: ${meta.sizeMB} MB`);
 
                                 const epTitleStr = (epMeta && epMeta.episode_title) ? ` - ${epMeta.episode_title}` : '';
                                 const caption = [
@@ -344,12 +346,12 @@ async function main() {
                                     channelId: opts.channel || null
                                 });
 
-                                console.log(`\n==================================================`);
-                                console.log(`🎉 [Worker ${opts.workerId}] [EP ${ep}/${totalEps}] UPLOAD COMPLETE!`);
-                                console.log(`   📡 Provider Used: 👑 AnimeTVPlus (1080p)`);
-                                console.log(`   💬 Telegram Msg ID: ${uploadResult.messageId}`);
-                                console.log(`   🔗 Direct Link: https://t.me/c/${String(uploadResult.channelId).replace('-100', '')}/${uploadResult.messageId}`);
-                                console.log(`==================================================\n`);
+                                logAnimeTvBold(`\n==================================================`);
+                                logAnimeTvBold(`🎉 [Worker ${opts.workerId}] [EP ${ep}/${totalEps}] UPLOAD COMPLETE!`);
+                                logAnimeTvBold(`   📡 Provider Used: 👑 AnimeTVPlus (1080p)`);
+                                logAnimeTvBold(`   💬 Telegram Msg ID: ${uploadResult.messageId}`);
+                                logAnimeTvBold(`   🔗 Direct Link: https://t.me/c/${String(uploadResult.channelId).replace('-100', '')}/${uploadResult.messageId}`);
+                                logAnimeTvBold(`==================================================\n`);
 
                                 await markEpisodeUploaded({
                                     animeId: anime.id,
@@ -403,23 +405,24 @@ async function main() {
                                     outputPath = path.join(tempDir, `${sanitizedTitle}_${Date.now()}.mp4`);
 
                                     const activeServer = desidubResolved.serverName || tryServer;
-                                    console.log(`\n==================================================`);
-                                    console.log(`🌐 [ACTIVE SCRAPER PROVIDER: DesiDubAnime]`);
-                                    console.log(`   🌐 Provider: DesiDubAnime (Multi-Server)`);
-                                    console.log(`   ⚡ Host / Server: ${activeServer}`);
-                                    console.log(`   🎬 Target Ep: Episode ${ep}/${totalEps}`);
-                                    console.log(`   🔊 Audio: 🇮🇳 Pure Hindi Dub (Isolated)`);
-                                    console.log(`==================================================\n`);
+                                    logDesiAnimeBold(`\n==================================================`);
+                                    logDesiAnimeBold(`🟦 [ACTIVE SCRAPER PROVIDER: DesiDubAnime]`);
+                                    logDesiAnimeBold(`   🌐 Provider: DesiDubAnime (Multi-Server)`);
+                                    logDesiAnimeBold(`   ⚡ Host / Server: ${activeServer}`);
+                                    logDesiAnimeBold(`   🎬 Target Ep: Episode ${ep}/${totalEps}`);
+                                    logDesiAnimeBold(`   🔊 Audio: 🇮🇳 Pure Hindi Dub (Isolated)`);
+                                    logDesiAnimeBold(`==================================================\n`);
 
-                                    console.log(`▶ Remuxing stream chunks to MP4 using server [${activeServer}]...`);
+                                    logDesiAnime(`▶ Remuxing stream chunks to MP4 using server [${activeServer}]...`);
                                     await convertStreamToMp4({
                                         streamUrl: desidubResolved.streamUrl,
                                         outputPath,
-                                        headers: desidubResolved.headers
+                                        headers: desidubResolved.headers,
+                                        provider: 'DesiDubAnime'
                                     });
 
                                     const meta = await probeVideo(outputPath);
-                                    console.log(`ℹ️ Resolution: ${meta.width}x${meta.height} | Duration: ${meta.duration.toFixed(1)}s | Size: ${meta.sizeMB} MB`);
+                                    logDesiAnime(`ℹ️ Resolution: ${meta.width}x${meta.height} | Duration: ${meta.duration.toFixed(1)}s | Size: ${meta.sizeMB} MB`);
 
                                     const epTitleStr = (epMeta && epMeta.episode_title) ? ` - ${epMeta.episode_title}` : '';
                                     const caption = [
@@ -442,13 +445,13 @@ async function main() {
                                         channelId: opts.channel || null
                                     });
 
-                                    console.log(`\n==================================================`);
-                                    console.log(`🎉 [Worker ${opts.workerId}] [EP ${ep}/${totalEps}] UPLOAD COMPLETE!`);
-                                    console.log(`   📡 Provider Used: 🌐 DesiDubAnime`);
-                                    console.log(`   ⚡ Server: ${activeServer}`);
-                                    console.log(`   💬 Telegram Msg ID: ${uploadResult.messageId}`);
-                                    console.log(`   🔗 Direct Link: https://t.me/c/${String(uploadResult.channelId).replace('-100', '')}/${uploadResult.messageId}`);
-                                    console.log(`==================================================\n`);
+                                    logDesiAnimeBold(`\n==================================================`);
+                                    logDesiAnimeBold(`🎉 [Worker ${opts.workerId}] [EP ${ep}/${totalEps}] UPLOAD COMPLETE!`);
+                                    logDesiAnimeBold(`   📡 Provider Used: 🌐 DesiDubAnime`);
+                                    logDesiAnimeBold(`   ⚡ Server: ${activeServer}`);
+                                    logDesiAnimeBold(`   💬 Telegram Msg ID: ${uploadResult.messageId}`);
+                                    logDesiAnimeBold(`   🔗 Direct Link: https://t.me/c/${String(uploadResult.channelId).replace('-100', '')}/${uploadResult.messageId}`);
+                                    logDesiAnimeBold(`==================================================\n`);
 
                                     await markEpisodeUploaded({
                                         animeId: anime.id,
@@ -571,7 +574,7 @@ Options:
 
                 if (opts.anime && !opts.site && !opts.url) {
                     try {
-                        console.log(`🚀 [Tier 1 Default] Querying AnimeTVPlus for "${opts.anime}" EP ${currentEp}...`);
+                        logAnimeTv(`🚀 [Tier 1 Default] Querying AnimeTVPlus for "${opts.anime}" EP ${currentEp}...`);
                         manualMalId = await resolveMalIdFromTitle(opts.anime);
                         if (manualMalId) {
                             resolved = await extractAnimeTvPlusStream({
@@ -580,13 +583,13 @@ Options:
                             });
                         }
                     } catch (atvErr) {
-                        console.log(`[i] AnimeTVPlus probe notice: ${atvErr.message}`);
+                        logAnimeTv(`[i] AnimeTVPlus probe notice: ${atvErr.message}`);
                     }
                 }
 
                 if (!resolved) {
                     if (opts.anime && !opts.site && !opts.url) {
-                        console.log(`ℹ️ [Tier 2 Fallback] Switching to DesiDubAnime for EP ${currentEp}...`);
+                        logDesiAnime(`ℹ️ [Tier 2 Fallback] Switching to DesiDubAnime for EP ${currentEp}...`);
                     }
                     resolved = await scrapeStream({
                         url: opts.url,
@@ -598,26 +601,31 @@ Options:
                     });
                 }
 
+                const isAtv = (resolved.serverName && resolved.serverName.includes('AnimeTV')) || (resolved.hindiAudioUrl != null);
+                const activeProv = isAtv ? 'AnimeTVPlus' : 'DesiDubAnime';
+                const logEp = (msg, bold = false) => console.log(colorByProvider(msg, activeProv, bold));
+
                 const videoTitle = opts.title || resolved.title || `Anime_EP_${currentEp}_${Date.now()}`;
                 const sanitizedTitle = videoTitle.replace(/[^a-zA-Z0-9_\-\.\s]/g, '').trim();
                 outputPath = path.join(tempDir, `${sanitizedTitle || 'stream_video'}_${Date.now()}.mp4`);
 
                 // STEP 2: CONVERT / REMUX STREAM CHUNKS TO MP4 (Pure Hindi audio strictly locked)
-                console.log(`▶ [Episode ${currentEp}/${endEp}] Remuxing stream to MP4 (Pure Hindi audio locked)...`);
+                logEp(`▶ [Episode ${currentEp}/${endEp}] Remuxing stream to MP4 (Pure Hindi audio locked)...`);
                 await convertStreamToMp4({
                     streamUrl: resolved.streamUrl,
                     outputPath,
                     headers: resolved.headers,
-                    overrideAudioUrl: resolved.hindiAudioUrl || null
+                    overrideAudioUrl: resolved.hindiAudioUrl || null,
+                    provider: activeProv
                 });
 
                 // STEP 3: PROBE VIDEO METADATA
-                console.log(`▶ [Episode ${currentEp}/${endEp}] Probing video metadata...`);
+                logEp(`▶ [Episode ${currentEp}/${endEp}] Probing video metadata...`);
                 const meta = await probeVideo(outputPath);
-                console.log(`ℹ️ Resolution: ${meta.width}x${meta.height} | Duration: ${meta.duration.toFixed(1)}s | Size: ${meta.sizeMB} MB`);
+                logEp(`ℹ️ Resolution: ${meta.width}x${meta.height} | Duration: ${meta.duration.toFixed(1)}s | Size: ${meta.sizeMB} MB`);
 
                 // STEP 4: UPLOAD TO TELEGRAM VIA MTPROTO
-                console.log(`▶ [Episode ${currentEp}/${endEp}] Uploading to Telegram channel...`);
+                logEp(`▶ [Episode ${currentEp}/${endEp}] Uploading to Telegram channel...`);
                 const providerTag = resolved.serverName ? `🌐 Source Provider: ${resolved.serverName}` : `🌐 Source Provider: DesiDubAnime [${opts.server || 'Auto'}]`;
                 const defaultCaption = opts.caption || [
                     `🎬 **${videoTitle}**`,
@@ -639,8 +647,8 @@ Options:
                     channelId: opts.channel || null
                 });
 
-                console.log(`✅ [Episode ${currentEp}/${endEp}] Uploaded successfully! Msg ID: ${uploadResult.messageId}`);
-                console.log(`   Link: ${uploadResult.directLink}`);
+                logEp(`✅ [Episode ${currentEp}/${endEp}] Uploaded successfully! Msg ID: ${uploadResult.messageId}`, true);
+                logEp(`   Link: ${uploadResult.directLink}`);
 
                 // STEP 5: SYNC TO VPS ANILIST & ANIZIP DATABASE
                 try {

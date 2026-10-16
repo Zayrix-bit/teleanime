@@ -10,6 +10,8 @@
  * - Disguised HLS playlist & segment compatibility (.jpg / .txt bypass)
  */
 
+import { ANSI, logAnimeTv, logAnimeTvBold } from './logger.js';
+
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36';
 
 /**
@@ -104,18 +106,18 @@ export async function extractAnimeTvPlusStream({ malId, anilistId, episodeNumber
         'Referer': `https://embed.animetvplus.site/${targetMal}/${ep}`
     };
 
-    console.log(`[*] [AnimeTVPlus] Probing MAL ${targetMal} EP ${ep}...`);
+    logAnimeTv(`[*] [AnimeTVPlus] Probing MAL ${targetMal} EP ${ep}...`);
 
     try {
         const res = await fetch(apiUrl, { headers, signal: AbortSignal.timeout(7000) });
         if (!res.ok) {
-            console.log(`[i] [AnimeTVPlus] API returned HTTP ${res.status} for MAL ${targetMal} EP ${ep}`);
+            logAnimeTv(`[i] [AnimeTVPlus] API returned HTTP ${res.status} for MAL ${targetMal} EP ${ep}`);
             return null;
         }
 
         const data = await res.json();
         if (!data || !data.m3u8) {
-            console.log(`[i] [AnimeTVPlus] No stream URL in API response`);
+            logAnimeTv(`[i] [AnimeTVPlus] No stream URL in API response`);
             return null;
         }
 
@@ -124,7 +126,7 @@ export async function extractAnimeTvPlusStream({ malId, anilistId, episodeNumber
         // Fetch master playlist to verify Hindi audio presence and locate top video variant
         const masterRes = await fetch(masterUrl, { headers, signal: AbortSignal.timeout(7000) });
         if (!masterRes.ok) {
-            console.log(`[i] [AnimeTVPlus] Failed to fetch master playlist (${masterRes.status})`);
+            logAnimeTv(`[i] [AnimeTVPlus] Failed to fetch master playlist (${masterRes.status})`);
             return null;
         }
 
@@ -151,7 +153,7 @@ export async function extractAnimeTvPlusStream({ malId, anilistId, episodeNumber
 
         // STRICT REQUIREMENT: If no Hindi audio track exists, SKIP AnimeTVPlus entirely
         if (!hasHindi || !hindiTrackUri) {
-            console.log(`[i] [AnimeTVPlus] Stream exists for MAL ${targetMal} EP ${ep} but NO Hindi audio track found. Skipping to DesiDub fallback.`);
+            logAnimeTv(`[i] [AnimeTVPlus] Stream exists for MAL ${targetMal} EP ${ep} but NO Hindi audio track found. Skipping to DesiDub fallback.`);
             return null;
         }
 
@@ -162,11 +164,11 @@ export async function extractAnimeTvPlusStream({ malId, anilistId, episodeNumber
                 signal: AbortSignal.timeout(4000)
             });
             if (!audioCheck.ok) {
-                console.log(`[i] [AnimeTVPlus] Hindi audio track returned HTTP ${audioCheck.status} (unreachable on edge storage). Falling back to DesiDub.`);
+                logAnimeTv(`[i] [AnimeTVPlus] Hindi audio track returned HTTP ${audioCheck.status} (unreachable on edge storage). Falling back to DesiDub.`);
                 return null;
             }
         } catch (audioErr) {
-            console.log(`[i] [AnimeTVPlus] Failed to reach Hindi audio track (${audioErr.message}). Falling back to DesiDub.`);
+            logAnimeTv(`[i] [AnimeTVPlus] Failed to reach Hindi audio track (${audioErr.message}). Falling back to DesiDub.`);
             return null;
         }
 
@@ -197,7 +199,7 @@ export async function extractAnimeTvPlusStream({ malId, anilistId, episodeNumber
             }
         }
 
-        console.log(`✅ [AnimeTVPlus] 1080p Hindi Dub Stream Verified! (${resolution} | Audio: "${hindiTrackName}")`);
+        logAnimeTvBold(`✅ [AnimeTVPlus] 1080p Hindi Dub Stream Verified! (${resolution} | Audio: "${hindiTrackName}")`);
 
         return {
             success: true,

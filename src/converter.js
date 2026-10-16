@@ -13,6 +13,7 @@ import fs from 'fs';
 import path from 'path';
 import { spawn, exec } from 'child_process';
 import { promisify } from 'util';
+import { colorByProvider, ANSI } from './logger.js';
 
 const execAsync = promisify(exec);
 
@@ -46,11 +47,15 @@ export function isHindiAudioLine(line) {
  * @returns {Promise<{ isMaster: boolean, videoUrl: string, audioUrl: string|null, topVariant?: Object, variants?: Array, close: () => void }>}
  */
 export async function createSmartMasterServer(masterUrl, headers = {}) {
-    console.log(`\n🔍 [SMART QUALITY & AUDIO ENGINE] Analyzing stream: ${masterUrl}`);
+    const isAtv = (headers && (headers.Origin || '').includes('animetvplus')) || masterUrl.includes('animetvplus');
+    const prov = isAtv ? 'AnimeTVPlus' : 'DesiDubAnime';
+    const log = (msg, bold = false) => console.log(colorByProvider(msg, prov, bold));
+
+    log(`\n🔍 [SMART QUALITY & AUDIO ENGINE] Analyzing stream: ${masterUrl}`, true);
     
     // Only attempt to parse if it's an HLS playlist URL
     if (!masterUrl.includes('.m3u8') && !masterUrl.includes('hls') && !masterUrl.includes('.txt') && !masterUrl.includes('.jpg')) {
-        console.log(`[i] Direct media URL detected, proceeding directly.`);
+        log(`[i] Direct media URL detected, proceeding directly.`);
         return { isMaster: false, videoUrl: masterUrl, audioUrl: null, close: () => {} };
     }
 
@@ -68,7 +73,7 @@ export async function createSmartMasterServer(masterUrl, headers = {}) {
     }
 
     if (!content.includes('#EXT-X-STREAM-INF')) {
-        console.log(`[i] Single variant stream detected (already direct video playlist).`);
+        log(`[i] Single variant stream detected (already direct video playlist).`);
         return { isMaster: false, videoUrl: masterUrl, audioUrl: null, close: () => {} };
     }
 
@@ -123,7 +128,7 @@ export async function createSmartMasterServer(masterUrl, headers = {}) {
     }
 
     if (variants.length === 0) {
-        console.log(`[i] No stream variants found in playlist, using original stream.`);
+        log(`[i] No stream variants found in playlist, using original stream.`);
         return { isMaster: false, videoUrl: masterUrl, audioUrl: null, close: () => {} };
     }
 
@@ -131,12 +136,12 @@ export async function createSmartMasterServer(masterUrl, headers = {}) {
     variants.sort((a, b) => b.qualityScore - a.qualityScore);
     const topVariant = variants[0];
 
-    console.log(`==================================================`);
-    console.log(`🎬 SMART RESOLUTION SELECTOR: Found ${variants.length} stream quality level(s):`);
+    log(`==================================================`, true);
+    log(`🎬 SMART RESOLUTION SELECTOR: Found ${variants.length} stream quality level(s):`, true);
     variants.forEach((v, idx) => {
-        console.log(`   ${idx === 0 ? '🏆 [HIGHEST SELECTED]' : '   [AVAILABLE QUALITY]'} -> ${v.label} | Bitrate: ${(v.bandwidth / 1000000).toFixed(2)} Mbps`);
+        log(`   ${idx === 0 ? '🏆 [HIGHEST SELECTED]' : '   [AVAILABLE QUALITY]'} -> ${v.label} | Bitrate: ${(v.bandwidth / 1000000).toFixed(2)} Mbps`);
     });
-    console.log(`==================================================`);
+    log(`==================================================`, true);
 
     // Pick ONLY the Pure Hindi audio track
     let hindiAudio = audioTracks.find(t => t.isHindi);
@@ -160,12 +165,12 @@ export async function createSmartMasterServer(masterUrl, headers = {}) {
         } catch (err) {
             if (err.message.includes('Aborting non-Hindi remux')) throw err;
         }
-        console.log(`🎯 [AUDIO ISOLATION] Pure HINDI Audio Locked: "${hindiAudio.name || 'Hindi'}" (${hindiAudio.lang || 'hi'})`);
+        log(`🎯 [AUDIO ISOLATION] Pure HINDI Audio Locked: "${hindiAudio.name || 'Hindi'}" (${hindiAudio.lang || 'hi'})`, true);
     } else if (audioTracks.length > 0) {
         console.warn(`❌ [AUDIO LOCK ERROR] Multi-audio stream contains [${audioTracks.map(t=>t.name || t.lang).join(', ')}] but NO Hindi audio track! Rejecting to enforce 100% Pure Hindi.`);
         throw new Error(`Stream has no Hindi audio track (${audioTracks.map(t=>t.name || t.lang).join(', ')}). Aborting non-Hindi remux.`);
     } else {
-        console.log(`ℹ️ [AUDIO ISOLATION] Single multiplexed stream detected.`);
+        log(`ℹ️ [AUDIO ISOLATION] Single multiplexed stream detected.`);
     }
 
     return {
@@ -182,11 +187,13 @@ export async function createSmartMasterServer(masterUrl, headers = {}) {
  * Downloads direct MKV / video files using aria2c and extracts/remuxes Hindi audio to clean MP4.
  */
 async function convertDirectMediaToMp4({ streamUrl, outputPath, headers = {} }) {
-    console.log(`\n==================================================`);
-    console.log(`🎬 DIRECT MEDIA ARIA2C + FFMPEG REMUX ENGINE`);
-    console.log(`   Source: ${streamUrl}`);
-    console.log(`   Output: ${outputPath}`);
-    console.log(`==================================================`);
+    const log = (msg, bold = false) => console.log(colorByProvider(msg, 'DesiDubAnime', bold));
+
+    log(`\n==================================================`, true);
+    log(`🎬 DIRECT MEDIA ARIA2C + FFMPEG REMUX ENGINE [DesiDubAnime]`, true);
+    log(`   Source: ${streamUrl}`);
+    log(`   Output: ${outputPath}`);
+    log(`==================================================`, true);
 
     const tempDir = path.dirname(outputPath);
     const tempMkv = path.join(tempDir, `temp_raw_${Date.now()}.mkv`);
@@ -195,12 +202,12 @@ async function convertDirectMediaToMp4({ streamUrl, outputPath, headers = {} }) 
     const ref = headers['Referer'] || headers['referer'] || 'https://ddn.iqsmartgames.com/';
     const ua = headers['User-Agent'] || headers['user-agent'] || 'Mozilla/5.0';
 
-    console.log(`[*] Downloading raw media at high speed with aria2c...`);
+    log(`[*] Downloading raw media at high speed with aria2c...`);
     const ariaCmd = `aria2c -x 8 -s 8 --header="Referer: ${ref}" --header="User-Agent: ${ua}" -d "${tempDir}" -o "${tempFilename}" "${streamUrl}"`;
     await execAsync(ariaCmd);
 
     try {
-        console.log(`[*] Probing audio and video streams with ffprobe...`);
+        log(`[*] Probing audio and video streams with ffprobe...`);
         const { stdout: probeJson } = await execAsync(`ffprobe -v error -show_entries stream=index,codec_type,codec_name:stream_tags=language -of json "${tempMkv}"`);
         const data = JSON.parse(probeJson);
 
@@ -225,12 +232,12 @@ async function convertDirectMediaToMp4({ streamUrl, outputPath, headers = {} }) 
         }
 
         const chosenAudio = hindiIdx !== null ? hindiIdx : (defaultAudioIdx !== null ? defaultAudioIdx : 1);
-        console.log(`🎯 [AUDIO ISOLATION] Selected Audio Track: ${chosenAudio} (Hindi Found: ${hindiIdx !== null}) | Video Codec: ${videoCodec}`);
+        log(`🎯 [AUDIO ISOLATION] Selected Audio Track: ${chosenAudio} (Hindi Found: ${hindiIdx !== null}) | Video Codec: ${videoCodec}`, true);
 
         const isHevc = videoCodec.toLowerCase().includes('hevc') || videoCodec.toLowerCase().includes('h265');
         const tagArg = isHevc ? '-tag:v hvc1' : '';
         const ffmpegCmd = `ffmpeg -y -hide_banner -loglevel warning -i "${tempMkv}" -map 0:${videoIdx} -map 0:${chosenAudio} -c:v copy ${tagArg} -c:a aac -b:a 192k -metadata:s:a:0 language=hin -metadata:s:a:0 title=Hindi -movflags +faststart "${outputPath}"`;
-        console.log(`[*] Remuxing to clean MP4 with Hindi audio...`);
+        log(`[*] Remuxing to clean MP4 with Hindi audio...`);
         await execAsync(ffmpegCmd);
     } finally {
         if (fs.existsSync(tempMkv)) {
@@ -243,7 +250,7 @@ async function convertDirectMediaToMp4({ streamUrl, outputPath, headers = {} }) 
     }
 
     const sizeMB = (fs.statSync(outputPath).size / (1024 * 1024)).toFixed(2);
-    console.log(`✅ Direct stream converted to MP4! (Size: ${sizeMB} MB)`);
+    log(`✅ Direct stream converted to MP4! (Size: ${sizeMB} MB)`, true);
     return outputPath;
 }
 
@@ -257,7 +264,7 @@ async function convertDirectMediaToMp4({ streamUrl, outputPath, headers = {} }) 
  * @param {Object} [options.headers] - Custom HTTP headers (Referer, User-Agent, etc.)
  * @returns {Promise<string>} Path to finished MP4
  */
-export async function convertStreamToMp4({ streamUrl, outputPath, headers = {}, overrideAudioUrl = null }) {
+export async function convertStreamToMp4({ streamUrl, outputPath, headers = {}, overrideAudioUrl = null, provider = null }) {
     const outputDir = path.dirname(outputPath);
     if (!fs.existsSync(outputDir)) {
         fs.mkdirSync(outputDir, { recursive: true });
@@ -272,6 +279,13 @@ export async function convertStreamToMp4({ streamUrl, outputPath, headers = {}, 
         return await convertDirectMediaToMp4({ streamUrl, outputPath, headers });
     }
 
+    const isAnimeTv = (provider && provider.toLowerCase().includes('animetv')) ||
+                      (headers && (headers.Origin || '').includes('animetvplus')) ||
+                      streamUrl.includes('animetvplus') ||
+                      (overrideAudioUrl && overrideAudioUrl.includes('animetvplus'));
+    const activeProvider = isAnimeTv ? 'AnimeTVPlus' : 'DesiDubAnime';
+    const log = (msg, bold = false) => console.log(colorByProvider(msg, activeProvider, bold));
+
     // Format headers for FFmpeg
     let headerStr = '';
     if (headers && Object.keys(headers).length > 0) {
@@ -285,19 +299,19 @@ export async function convertStreamToMp4({ streamUrl, outputPath, headers = {}, 
     const videoUrl = streamPlan.videoUrl || streamUrl;
     const audioUrl = overrideAudioUrl || streamPlan.audioUrl || null;
 
-    console.log(`\n==================================================`);
-    console.log(`🎬 FFMPEG STREAM CONVERSION`);
-    console.log(`   Source: ${streamUrl}`);
+    log(`\n==================================================`, true);
+    log(`🎬 FFMPEG STREAM CONVERSION (${activeProvider})`, true);
+    log(`   Source: ${streamUrl}`);
     if (streamPlan.topVariant) {
-        console.log(`   Quality: 🏆 ${streamPlan.topVariant.label}`);
+        log(`   Quality: 🏆 ${streamPlan.topVariant.label}`);
     }
     if (audioUrl) {
-        console.log(`   Audio Track: 🇮🇳 100% PURE HINDI AUDIO ONLY (Isolated)`);
+        log(`   Audio Track: 🇮🇳 100% PURE HINDI AUDIO ONLY (Isolated)`);
     } else {
-        console.log(`   Audio Track: 🇮🇳 Stream default audio track`);
+        log(`   Audio Track: 🇮🇳 Stream default audio track`);
     }
-    console.log(`   Output: ${outputPath}`);
-    console.log(`==================================================`);
+    log(`   Output: ${outputPath}`);
+    log(`==================================================`, true);
 
     const runFfmpeg = (extraArgs = []) => {
         return new Promise((resolve, reject) => {
@@ -380,7 +394,7 @@ export async function convertStreamToMp4({ streamUrl, outputPath, headers = {}, 
     const startTime = Date.now();
 
     try {
-        console.log(`[*] Executing lossless remux (-c copy + Hindi audio isolation)...`);
+        log(`[*] Executing lossless remux (-c copy + Hindi audio isolation)...`);
         await runFfmpeg([
             '-c', 'copy',
             '-bsf:a', 'aac_adtstoasc',
@@ -409,7 +423,7 @@ export async function convertStreamToMp4({ streamUrl, outputPath, headers = {}, 
     }
 
     const sizeMB = (fs.statSync(outputPath).size / (1024 * 1024)).toFixed(2);
-    console.log(`✅ Converted to MP4 in ${elapsed}s! (Size: ${sizeMB} MB)`);
+    log(`✅ Converted to MP4 in ${elapsed}s! (Size: ${sizeMB} MB)`, true);
 
     return outputPath;
 }

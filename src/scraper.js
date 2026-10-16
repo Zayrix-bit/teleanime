@@ -5,6 +5,7 @@
 
 import { searchAnime, getAnimeEpisodes, extractEpisodeStream } from './desidubScraper.js';
 import { extractAnimeTvPlusStream, getMalIdFromAniList, resolveMalIdFromTitle } from './animeTvPlusScraper.js';
+import { logAnimeTv, logAnimeTvBold, logDesiAnime, logDesiAnimeBold, colorByProvider } from './logger.js';
 
 // Registry of site-specific scraper handlers
 const siteScrapers = {
@@ -149,20 +150,20 @@ export async function scrapeStream({ url, site, title = '', query = '', episode 
     if (searchTerm) {
         const targetEp = episode ? parseInt(episode, 10) : 1;
         try {
-            console.log(`🚀 [Tier 1 Default] Probing AnimeTVPlus for "${searchTerm}" EP ${targetEp}...`);
+            logAnimeTv(`🚀 [Tier 1 Default] Probing AnimeTVPlus for "${searchTerm}" EP ${targetEp}...`);
             const malId = await resolveMalIdFromTitle(searchTerm);
             if (malId) {
                 const atvStream = await extractAnimeTvPlusStream({ malId, episodeNumber: targetEp });
                 if (atvStream && atvStream.hasHindiAudio) {
-                    console.log(`👑 [Tier 1 Success] AnimeTVPlus stream verified with Pure Hindi audio!`);
+                    logAnimeTvBold(`👑 [Tier 1 Success] AnimeTVPlus stream verified with Pure Hindi audio!`);
                     return atvStream;
                 }
             }
         } catch (e) {
-            console.log(`[i] AnimeTVPlus probe notice: ${e.message}`);
+            logAnimeTv(`[i] AnimeTVPlus probe notice: ${e.message}`);
         }
 
-        console.log(`ℹ️ [Tier 2 Fallback] Switching to DesiDubAnime for "${searchTerm}" EP ${targetEp}...`);
+        logDesiAnime(`ℹ️ [Tier 2 Fallback] Switching to DesiDubAnime for "${searchTerm}" EP ${targetEp}...`);
         return await siteScrapers['desidub']({ url, episode: targetEp, title, query: searchTerm, server });
     }
 
