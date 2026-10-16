@@ -276,7 +276,15 @@ async function main() {
                                 const sanitizedTitle = `${anime.title_english}_S1_EP${ep}`.replace(/[^a-zA-Z0-9_\-\.\s]/g, '').trim();
                                 outputPath = path.join(tempDir, `${sanitizedTitle}_${Date.now()}.mp4`);
 
-                                console.log(`▶ Remuxing stream chunks to MP4 using server [${resolved.serverName}] (1080p Pure Hindi)...`);
+                                console.log(`\n==================================================`);
+                                console.log(`💎 [ACTIVE SCRAPER PROVIDER: AnimeTVPlus]`);
+                                console.log(`   👑 Provider: AnimeTVPlus (Direct 1080p Stream)`);
+                                console.log(`   ⚡ Server: ${resolved.serverName || 'AnimeTV+'}`);
+                                console.log(`   🎬 Target Ep: Episode ${ep}/${totalEps}`);
+                                console.log(`   🔊 Audio: 🇮🇳 Hindi Dub (Multi-Audio Isolated)`);
+                                console.log(`==================================================\n`);
+
+                                console.log(`▶ Remuxing stream chunks to MP4 using provider [AnimeTVPlus] (1080p Pure Hindi)...`);
                                 await convertStreamToMp4({
                                     streamUrl: resolved.streamUrl,
                                     outputPath,
@@ -290,6 +298,7 @@ async function main() {
                                 const caption = [
                                     `🎬 **${anime.title_english}${epTitleStr}**`,
                                     `📌 Episode: ${ep} / ${totalEps} (${anime.season})`,
+                                    `🌐 Source Provider: 👑 AnimeTVPlus (1080p Direct)`,
                                     `🔊 Audio: Hindi Dub (Multi-Audio)`,
                                     `📐 Resolution: ${meta.width}x${meta.height}`,
                                     `⏱ Duration: ${Math.floor(meta.duration / 60)}m ${Math.floor(meta.duration % 60)}s`,
@@ -306,7 +315,12 @@ async function main() {
                                     channelId: opts.channel || null
                                 });
 
-                                console.log(`✅ [Worker ${opts.workerId}] [EP ${ep}/${totalEps}] Uploaded via AnimeTVPlus! Msg ID: ${uploadResult.messageId}`);
+                                console.log(`\n==================================================`);
+                                console.log(`🎉 [Worker ${opts.workerId}] [EP ${ep}/${totalEps}] UPLOAD COMPLETE!`);
+                                console.log(`   📡 Provider Used: 👑 AnimeTVPlus (1080p)`);
+                                console.log(`   💬 Telegram Msg ID: ${uploadResult.messageId}`);
+                                console.log(`   🔗 Direct Link: https://t.me/c/${String(uploadResult.channelId).replace('-100', '')}/${uploadResult.messageId}`);
+                                console.log(`==================================================\n`);
 
                                 await markEpisodeUploaded({
                                     animeId: anime.id,
@@ -317,7 +331,7 @@ async function main() {
                                     telegramChannelId: String(uploadResult.channelId),
                                     fileSizeBytes: uploadResult.sizeBytes,
                                     durationSeconds: Math.round(meta.duration),
-                                    serverUsed: 'AnimeTVPlus'
+                                    serverUsed: 'AnimeTVPlus (1080p)'
                                 });
 
                                 episodeUploaded = true;
@@ -359,7 +373,16 @@ async function main() {
                                     const sanitizedTitle = `${anime.title_english}_S1_EP${ep}`.replace(/[^a-zA-Z0-9_\-\.\s]/g, '').trim();
                                     outputPath = path.join(tempDir, `${sanitizedTitle}_${Date.now()}.mp4`);
 
-                                    console.log(`▶ Remuxing stream chunks to MP4 using server [${desidubResolved.serverName}]...`);
+                                    const activeServer = desidubResolved.serverName || tryServer;
+                                    console.log(`\n==================================================`);
+                                    console.log(`🌐 [ACTIVE SCRAPER PROVIDER: DesiDubAnime]`);
+                                    console.log(`   🌐 Provider: DesiDubAnime (Multi-Server)`);
+                                    console.log(`   ⚡ Host / Server: ${activeServer}`);
+                                    console.log(`   🎬 Target Ep: Episode ${ep}/${totalEps}`);
+                                    console.log(`   🔊 Audio: 🇮🇳 Pure Hindi Dub (Isolated)`);
+                                    console.log(`==================================================\n`);
+
+                                    console.log(`▶ Remuxing stream chunks to MP4 using server [${activeServer}]...`);
                                     await convertStreamToMp4({
                                         streamUrl: desidubResolved.streamUrl,
                                         outputPath,
@@ -373,6 +396,7 @@ async function main() {
                                     const caption = [
                                         `🎬 **${anime.title_english}${epTitleStr}**`,
                                         `📌 Episode: ${ep} / ${totalEps} (${anime.season})`,
+                                        `🌐 Source Provider: DesiDubAnime [${activeServer}]`,
                                         `🔊 Audio: Hindi Dub (Multi-Audio)`,
                                         `📐 Resolution: ${meta.width}x${meta.height}`,
                                         `⏱ Duration: ${Math.floor(meta.duration / 60)}m ${Math.floor(meta.duration % 60)}s`,
@@ -389,7 +413,13 @@ async function main() {
                                         channelId: opts.channel || null
                                     });
 
-                                    console.log(`✅ [Worker ${opts.workerId}] [EP ${ep}/${totalEps}] Uploaded via DesiDub! Msg ID: ${uploadResult.messageId}`);
+                                    console.log(`\n==================================================`);
+                                    console.log(`🎉 [Worker ${opts.workerId}] [EP ${ep}/${totalEps}] UPLOAD COMPLETE!`);
+                                    console.log(`   📡 Provider Used: 🌐 DesiDubAnime`);
+                                    console.log(`   ⚡ Server: ${activeServer}`);
+                                    console.log(`   💬 Telegram Msg ID: ${uploadResult.messageId}`);
+                                    console.log(`   🔗 Direct Link: https://t.me/c/${String(uploadResult.channelId).replace('-100', '')}/${uploadResult.messageId}`);
+                                    console.log(`==================================================\n`);
 
                                     await markEpisodeUploaded({
                                         animeId: anime.id,
@@ -400,7 +430,7 @@ async function main() {
                                         telegramChannelId: String(uploadResult.channelId),
                                         fileSizeBytes: uploadResult.sizeBytes,
                                         durationSeconds: Math.round(meta.duration),
-                                        serverUsed: desidubResolved.serverName || tryServer
+                                        serverUsed: `DesiDubAnime (${activeServer})`
                                     });
 
                                     episodeUploaded = true;
@@ -535,9 +565,11 @@ Options:
 
                 // STEP 4: UPLOAD TO TELEGRAM VIA MTPROTO
                 console.log(`▶ [Episode ${currentEp}/${endEp}] Uploading to Telegram channel...`);
+                const providerTag = resolved.serverName ? `🌐 Source Provider: ${resolved.serverName}` : `🌐 Source Provider: DesiDubAnime [${opts.server || 'Auto'}]`;
                 const defaultCaption = opts.caption || [
                     `🎬 **${videoTitle}**`,
                     resolved.episode ? `📌 Episode: ${resolved.episode}` : `📌 Episode: ${currentEp}`,
+                    providerTag,
                     `🔊 Audio: Hindi Dub (Multi-Audio)`,
                     `📐 Resolution: ${meta.width}x${meta.height}`,
                     `⏱ Duration: ${Math.floor(meta.duration / 60)}m ${Math.floor(meta.duration % 60)}s`,
@@ -566,7 +598,7 @@ Options:
                         telegramChannelId: String(uploadResult.channelId),
                         fileSizeBytes: uploadResult.sizeBytes,
                         durationSeconds: Math.round(meta.duration),
-                        serverUsed: opts.server || 'vidmoly'
+                        serverUsed: resolved.serverName || opts.server || 'DesiDubAnime'
                     });
                 } catch (vpsErr) {
                     console.warn(`⚠️ [VPS Tracker Sync]:`, vpsErr.message);
