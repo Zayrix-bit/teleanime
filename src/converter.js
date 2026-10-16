@@ -49,7 +49,7 @@ export async function createSmartMasterServer(masterUrl, headers = {}) {
     console.log(`\n🔍 [SMART QUALITY & AUDIO ENGINE] Analyzing stream: ${masterUrl}`);
     
     // Only attempt to parse if it's an HLS playlist URL
-    if (!masterUrl.includes('.m3u8') && !masterUrl.includes('hls')) {
+    if (!masterUrl.includes('.m3u8') && !masterUrl.includes('hls') && !masterUrl.includes('.txt') && !masterUrl.includes('.jpg')) {
         console.log(`[i] Direct media URL detected, proceeding directly.`);
         return { isMaster: false, videoUrl: masterUrl, audioUrl: null, close: () => {} };
     }
@@ -190,12 +190,14 @@ async function convertDirectMediaToMp4({ streamUrl, outputPath, headers = {} }) 
         const data = JSON.parse(probeJson);
 
         let videoIdx = 0;
+        let videoCodec = '';
         let defaultAudioIdx = null;
         let hindiIdx = null;
 
         for (const s of data.streams || []) {
-            if (s.codec_type === 'video' && videoIdx === 0) {
+            if (s.codec_type === 'video' && videoCodec === '') {
                 videoIdx = s.index;
+                videoCodec = s.codec_name || '';
             }
             if (s.codec_type === 'audio') {
                 if (defaultAudioIdx === null) defaultAudioIdx = s.index;
@@ -207,9 +209,11 @@ async function convertDirectMediaToMp4({ streamUrl, outputPath, headers = {} }) 
         }
 
         const chosenAudio = hindiIdx !== null ? hindiIdx : (defaultAudioIdx !== null ? defaultAudioIdx : 1);
-        console.log(`🎯 [AUDIO ISOLATION] Selected Audio Track: ${chosenAudio} (Hindi Found: ${hindiIdx !== null})`);
+        console.log(`🎯 [AUDIO ISOLATION] Selected Audio Track: ${chosenAudio} (Hindi Found: ${hindiIdx !== null}) | Video Codec: ${videoCodec}`);
 
-        const ffmpegCmd = `ffmpeg -y -hide_banner -loglevel warning -i "${tempMkv}" -map 0:${videoIdx} -map 0:${chosenAudio} -c:v copy -tag:v hvc1 -c:a aac -b:a 192k -metadata:s:a:0 language=hin -metadata:s:a:0 title=Hindi -movflags +faststart "${outputPath}"`;
+        const isHevc = videoCodec.toLowerCase().includes('hevc') || videoCodec.toLowerCase().includes('h265');
+        const tagArg = isHevc ? '-tag:v hvc1' : '';
+        const ffmpegCmd = `ffmpeg -y -hide_banner -loglevel warning -i "${tempMkv}" -map 0:${videoIdx} -map 0:${chosenAudio} -c:v copy ${tagArg} -c:a aac -b:a 192k -metadata:s:a:0 language=hin -metadata:s:a:0 title=Hindi -movflags +faststart "${outputPath}"`;
         console.log(`[*] Remuxing to clean MP4 with Hindi audio...`);
         await execAsync(ffmpegCmd);
     } finally {
@@ -282,17 +286,25 @@ export async function convertStreamToMp4({ streamUrl, outputPath, headers = {} }
     const runFfmpeg = (extraArgs = []) => {
         return new Promise((resolve, reject) => {
             const inputArgs = [];
+            // Universal HLS support for .jpg / .txt / disguised stream segments
+            inputArgs.push('-allowed_extensions', 'ALL');
+
             if (headerStr) inputArgs.push('-headers', headerStr);
-            // CRITICAL SYNC FIX: When isolating separate audio from video variant in HLS streams,
-            // we MUST preserve MPEG-TS Presentation Timestamps (-copyts) across both inputs.
-            // Without -copyts, FFmpeg resets both inputs independently to 0, destroying the original
-            // studio audio delay (~0.5s-1.5s) and causing voice to lead / animation to lag!
             if (audioUrl) inputArgs.push('-copyts');
+            inputArgs.push('-thread_queue_size', '512');
+            if (videoUrl.includes('.jpg') || videoUrl.includes('.txt')) {
+                inputArgs.push('-f', 'hls');
+            }
             inputArgs.push('-i', videoUrl);
 
             if (audioUrl) {
+                inputArgs.push('-allowed_extensions', 'ALL');
                 if (headerStr) inputArgs.push('-headers', headerStr);
                 inputArgs.push('-copyts');
+                inputArgs.push('-thread_queue_size', '512');
+                if (audioUrl.includes('.jpg') || audioUrl.includes('.txt')) {
+                    inputArgs.push('-f', 'hls');
+                }
                 inputArgs.push('-i', audioUrl);
             }
 

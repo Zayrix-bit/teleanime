@@ -29,6 +29,7 @@ import { scrapeStream } from './src/scraper.js';
 import { convertStreamToMp4, probeVideo } from './src/converter.js';
 import { uploadVideo, closeTelegram } from './src/telegram.js';
 import { searchAnime, getAnimeEpisodes, extractEpisodeStream, getCatalog, getCompletedHindiList } from './src/desidubScraper.js';
+import { extractAnimeTvPlusStream, getMalIdFromAniList } from './src/animeTvPlusScraper.js';
 import { markEpisodeUploaded, getVpsHindiAnimeList, getVpsHindiEpisodes, claimNextAnime, completeAnime, releaseAnime, markAnimeUnavailable, resetQueue } from './src/vpsTracker.js';
 
 dotenv.config();
@@ -198,7 +199,17 @@ async function main() {
                 console.log(`   Total Episodes: ${totalEps} | AniList ID: ${anime.anilist_id || 'N/A'}`);
                 console.log(`==================================================\n`);
 
-                // 1. Resolve Anime on DesiDubAnime with relevance scoring
+                // 1. Resolve MAL ID for AnimeTVPlus (Default Tier-1 Provider)
+                let targetMalId = anime.mal_id ? Number(anime.mal_id) : null;
+                if (!targetMalId && anime.anilist_id) {
+                    targetMalId = await getMalIdFromAniList(anime.anilist_id);
+                    if (targetMalId) {
+                        anime.mal_id = targetMalId;
+                        console.log(`[*] [Worker ${opts.workerId}] Auto-mapped AniList ID ${anime.anilist_id} -> MAL ID ${targetMalId}`);
+                    }
+                }
+
+                // 2. Pre-match DesiDubAnime in the background for reliable fallback
                 let matchedSiteAnime = null;
                 const searchCandidates = [anime.title_english, anime.title_romaji].filter(Boolean);
                 for (const cand of searchCandidates) {
@@ -211,18 +222,19 @@ async function main() {
                     } catch {}
                 }
 
-                if (!matchedSiteAnime) {
-                    console.warn(`⚠️ [Worker ${opts.workerId}] Anime "${anime.title_english}" has no relevant matches on DesiDubAnime catalog. Marking Unavailable.`);
-                    await markAnimeUnavailable({ animeId: anime.id, anilistId: anime.anilist_id });
-                    continue;
+                if (matchedSiteAnime) {
+                    console.log(`[*] [Worker ${opts.workerId}] DesiDubAnime fallback ready: "${matchedSiteAnime.title}" (${matchedSiteAnime.link})`);
+                } else {
+                    console.log(`[i] [Worker ${opts.workerId}] No DesiDubAnime match found (AnimeTVPlus will be sole provider)`);
                 }
 
-                console.log(`[*] [Worker ${opts.workerId}] Matched catalog entry: "${matchedSiteAnime.title}" (${matchedSiteAnime.link})`);
                 let siteEpisodes = [];
-                try {
-                    siteEpisodes = await getAnimeEpisodes(matchedSiteAnime.link);
-                } catch (epListErr) {
-                    console.warn(`[!] Failed to get episode list for "${anime.title_english}":`, epListErr.message);
+                if (matchedSiteAnime) {
+                    try {
+                        siteEpisodes = await getAnimeEpisodes(matchedSiteAnime.link);
+                    } catch (epListErr) {
+                        console.warn(`[!] Failed to get episode list from DesiDub fallback:`, epListErr.message);
+                    }
                 }
 
                 let allEpisodesSucceeded = true;
@@ -238,30 +250,33 @@ async function main() {
                     let outputPath = null;
 
                     try {
-                        const targetSiteEp = siteEpisodes.find(e => e.episodeNumber === ep) || siteEpisodes[ep - 1];
-                        const prefServer = (typeof opts.server === 'string' ? opts.server : 'vidmoly').toLowerCase();
-                        const serverFallbackList = [prefServer, 'mirror', 'vidmoly', 'ruby', 'abyss', 'p2p'].filter((v, i, a) => a.indexOf(v) === i);
                         let episodeUploaded = false;
                         let lastEpError = null;
+                        let resolved = null;
 
-                        for (const tryServer of serverFallbackList) {
+                        // ----------------------------------------------------
+                        // [TIER 1] DEFAULT HIGH-QUALITY PROVIDER: AnimeTVPlus
+                        // ----------------------------------------------------
+                        if (targetMalId || anime.anilist_id) {
                             try {
-                                let resolved = null;
-                                if (targetSiteEp && targetSiteEp.url) {
-                                    resolved = await extractEpisodeStream(targetSiteEp.url, tryServer);
-                                } else {
-                                    resolved = await scrapeStream({
-                                        site: 'desidub',
-                                        query: anime.title_english || anime.title_romaji,
-                                        episode: ep,
-                                        server: tryServer
-                                    });
-                                }
+                                console.log(`🚀 [Worker ${opts.workerId}] [EP ${ep}/${totalEps}] Querying AnimeTVPlus (Default 1080p)...`);
+                                resolved = await extractAnimeTvPlusStream({
+                                    malId: targetMalId,
+                                    anilistId: anime.anilist_id,
+                                    episodeNumber: ep
+                                });
+                            } catch (atvErr) {
+                                console.warn(`[!] [AnimeTVPlus] Probe error for EP ${ep}: ${atvErr.message}`);
+                            }
+                        }
 
+                        // If AnimeTVPlus returned a stream, remux and upload!
+                        if (resolved) {
+                            try {
                                 const sanitizedTitle = `${anime.title_english}_S1_EP${ep}`.replace(/[^a-zA-Z0-9_\-\.\s]/g, '').trim();
                                 outputPath = path.join(tempDir, `${sanitizedTitle}_${Date.now()}.mp4`);
 
-                                console.log(`▶ Remuxing stream chunks to MP4 using server [${resolved.serverName}]...`);
+                                console.log(`▶ Remuxing stream chunks to MP4 using server [${resolved.serverName}] (1080p Pure Hindi)...`);
                                 await convertStreamToMp4({
                                     streamUrl: resolved.streamUrl,
                                     outputPath,
@@ -291,9 +306,10 @@ async function main() {
                                     channelId: opts.channel || null
                                 });
 
-                                console.log(`✅ [Worker ${opts.workerId}] [EP ${ep}/${totalEps}] Uploaded! Msg ID: ${uploadResult.messageId}`);
+                                console.log(`✅ [Worker ${opts.workerId}] [EP ${ep}/${totalEps}] Uploaded via AnimeTVPlus! Msg ID: ${uploadResult.messageId}`);
 
                                 await markEpisodeUploaded({
+                                    animeId: anime.id,
                                     anilistId: anime.anilist_id,
                                     title: anime.title_english,
                                     episodeNumber: ep,
@@ -301,23 +317,107 @@ async function main() {
                                     telegramChannelId: String(uploadResult.channelId),
                                     fileSizeBytes: uploadResult.sizeBytes,
                                     durationSeconds: Math.round(meta.duration),
-                                    serverUsed: resolved.serverName || tryServer
+                                    serverUsed: 'AnimeTVPlus'
                                 });
 
                                 episodeUploaded = true;
-                                break; // Successfully uploaded this episode, move to next!
-                            } catch (serverErr) {
-                                console.warn(`[!] Server [${tryServer}] failed for EP ${ep} (${serverErr.message}). Trying fallback server...`);
-                                lastEpError = serverErr;
+                            } catch (remuxUploadErr) {
+                                console.warn(`[!] AnimeTVPlus remux/upload failed for EP ${ep} (${remuxUploadErr.message}). Switching to DesiDub fallback...`);
                                 if (outputPath && fs.existsSync(outputPath) && !opts.keepLocal) {
                                     try { fs.unlinkSync(outputPath); } catch {}
                                     outputPath = null;
+                                }
+                                resolved = null;
+                            }
+                        }
+
+                        // ----------------------------------------------------
+                        // [TIER 2] FALLBACK PROVIDER: DesiDubAnime Multi-Server
+                        // ----------------------------------------------------
+                        if (!episodeUploaded) {
+                            console.log(`ℹ️ [Worker ${opts.workerId}] [EP ${ep}/${totalEps}] Falling back to DesiDubAnime servers...`);
+                            const targetSiteEp = siteEpisodes.find(e => e.episodeNumber === ep) || siteEpisodes[ep - 1];
+                            const prefServer = (typeof opts.server === 'string' ? opts.server : 'p2p').toLowerCase();
+                            const serverFallbackList = [prefServer, 'vidmoly', 'mirror', 'ruby', 'abyss'].filter((v, i, a) => a.indexOf(v) === i);
+
+                            for (const tryServer of serverFallbackList) {
+                                try {
+                                    let desidubResolved = null;
+                                    if (targetSiteEp && targetSiteEp.url) {
+                                        desidubResolved = await extractEpisodeStream(targetSiteEp.url, tryServer);
+                                    } else if (matchedSiteAnime) {
+                                        desidubResolved = await scrapeStream({
+                                            site: 'desidub',
+                                            query: anime.title_english || anime.title_romaji,
+                                            episode: ep,
+                                            server: tryServer
+                                        });
+                                    } else {
+                                        break; // No DesiDub match available
+                                    }
+
+                                    const sanitizedTitle = `${anime.title_english}_S1_EP${ep}`.replace(/[^a-zA-Z0-9_\-\.\s]/g, '').trim();
+                                    outputPath = path.join(tempDir, `${sanitizedTitle}_${Date.now()}.mp4`);
+
+                                    console.log(`▶ Remuxing stream chunks to MP4 using server [${desidubResolved.serverName}]...`);
+                                    await convertStreamToMp4({
+                                        streamUrl: desidubResolved.streamUrl,
+                                        outputPath,
+                                        headers: desidubResolved.headers
+                                    });
+
+                                    const meta = await probeVideo(outputPath);
+                                    console.log(`ℹ️ Resolution: ${meta.width}x${meta.height} | Duration: ${meta.duration.toFixed(1)}s | Size: ${meta.sizeMB} MB`);
+
+                                    const epTitleStr = (epMeta && epMeta.episode_title) ? ` - ${epMeta.episode_title}` : '';
+                                    const caption = [
+                                        `🎬 **${anime.title_english}${epTitleStr}**`,
+                                        `📌 Episode: ${ep} / ${totalEps} (${anime.season})`,
+                                        `🔊 Audio: Hindi Dub (Multi-Audio)`,
+                                        `📐 Resolution: ${meta.width}x${meta.height}`,
+                                        `⏱ Duration: ${Math.floor(meta.duration / 60)}m ${Math.floor(meta.duration % 60)}s`,
+                                        `💾 Size: ${meta.sizeMB} MB`
+                                    ].join('\n');
+
+                                    const uploadResult = await uploadVideo({
+                                        filePath: outputPath,
+                                        fileName: `${sanitizedTitle}.mp4`,
+                                        caption,
+                                        duration: meta.duration,
+                                        width: meta.width,
+                                        height: meta.height,
+                                        channelId: opts.channel || null
+                                    });
+
+                                    console.log(`✅ [Worker ${opts.workerId}] [EP ${ep}/${totalEps}] Uploaded via DesiDub! Msg ID: ${uploadResult.messageId}`);
+
+                                    await markEpisodeUploaded({
+                                        animeId: anime.id,
+                                        anilistId: anime.anilist_id,
+                                        title: anime.title_english,
+                                        episodeNumber: ep,
+                                        telegramMessageId: uploadResult.messageId,
+                                        telegramChannelId: String(uploadResult.channelId),
+                                        fileSizeBytes: uploadResult.sizeBytes,
+                                        durationSeconds: Math.round(meta.duration),
+                                        serverUsed: desidubResolved.serverName || tryServer
+                                    });
+
+                                    episodeUploaded = true;
+                                    break;
+                                } catch (serverErr) {
+                                    console.warn(`[!] Server [${tryServer}] failed for EP ${ep} (${serverErr.message}). Trying fallback server...`);
+                                    lastEpError = serverErr;
+                                    if (outputPath && fs.existsSync(outputPath) && !opts.keepLocal) {
+                                        try { fs.unlinkSync(outputPath); } catch {}
+                                        outputPath = null;
+                                    }
                                 }
                             }
                         }
 
                         if (!episodeUploaded) {
-                            throw lastEpError || new Error(`All available streaming servers failed for EP ${ep}`);
+                            throw lastEpError || new Error(`All streaming sources (AnimeTVPlus & DesiDubAnime) failed for EP ${ep}`);
                         }
 
                     } catch (epErr) {
@@ -338,7 +438,13 @@ async function main() {
                     consecutiveErrors = 0;
                 } else {
                     consecutiveErrors++;
-                    console.warn(`⚠️ [Worker ${opts.workerId}] Anime "${anime.title_english}" encountered an error. Retrying same anime in 10s (attempt ${consecutiveErrors})...`);
+                    if (consecutiveErrors >= 5) {
+                        console.error(`🚨 [Worker ${opts.workerId}] Anime "${anime.title_english}" failed 5 consecutive attempts. Skipping to next pending anime to prevent pipeline stall.`);
+                        consecutiveErrors = 0;
+                        processedAnime++;
+                        break;
+                    }
+                    console.warn(`⚠️ [Worker ${opts.workerId}] Anime "${anime.title_english}" encountered an error. Retrying same anime in 10s (attempt ${consecutiveErrors}/5)...`);
                     await new Promise(r => setTimeout(r, 10000));
                     continue;
                 }

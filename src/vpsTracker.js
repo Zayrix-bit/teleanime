@@ -34,6 +34,7 @@ export async function markEpisodeUploaded(params) {
                 'User-Agent': 'TelegramStreamer/2.0'
             },
             body: JSON.stringify({
+                anime_id: params.animeId || null,
                 anilist_id: params.anilistId || null,
                 title: params.title || '',
                 season_number: params.seasonNumber || 1,

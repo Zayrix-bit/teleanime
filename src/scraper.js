@@ -4,9 +4,24 @@
  */
 
 import { searchAnime, getAnimeEpisodes, extractEpisodeStream } from './desidubScraper.js';
+import { extractAnimeTvPlusStream, getMalIdFromAniList } from './animeTvPlusScraper.js';
 
 // Registry of site-specific scraper handlers
 const siteScrapers = {
+    /**
+     * AnimeTVPlus Handler (Default High-Speed 1080p Multi-Audio)
+     */
+    'animetvplus': async ({ malId, anilistId, episode = 1 }) => {
+        const streamData = await extractAnimeTvPlusStream({
+            malId,
+            anilistId,
+            episodeNumber: episode
+        });
+        if (!streamData) {
+            throw new Error(`AnimeTVPlus has no 1080p Hindi stream for MAL ${malId || 'N/A'} EP ${episode}`);
+        }
+        return streamData;
+    },
     /**
      * DesiDubAnime Handler
      */
