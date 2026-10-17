@@ -202,8 +202,8 @@ async function convertDirectMediaToMp4({ streamUrl, outputPath, headers = {} }) 
     const ref = headers['Referer'] || headers['referer'] || 'https://ddn.iqsmartgames.com/';
     const ua = headers['User-Agent'] || headers['user-agent'] || 'Mozilla/5.0';
 
-    log(`[*] Downloading raw media at high speed with aria2c...`);
-    const ariaCmd = `aria2c -x 8 -s 8 --header="Referer: ${ref}" --header="User-Agent: ${ua}" -d "${tempDir}" -o "${tempFilename}" "${streamUrl}"`;
+    log(`[*] Downloading raw media at turbo speed with aria2c (-x 16 connections, 1M chunks)...`);
+    const ariaCmd = `aria2c -x 16 -s 16 -j 16 -k 1M --file-allocation=none --summary-interval=0 --allow-overwrite=true --header="Referer: ${ref}" --header="User-Agent: ${ua}" -d "${tempDir}" -o "${tempFilename}" "${streamUrl}"`;
     await execAsync(ariaCmd);
 
     try {
@@ -318,9 +318,9 @@ export async function convertStreamToMp4({ streamUrl, outputPath, headers = {}, 
             const inputArgs = [];
             // Universal HLS support for .jpg / .txt / disguised stream segments
             if (videoUrl.includes('.jpg') || videoUrl.includes('.txt') || videoUrl.includes('.m3u8')) {
-                inputArgs.push('-f', 'hls', '-allowed_extensions', 'ALL', '-allowed_segment_extensions', 'ALL');
+                inputArgs.push('-f', 'hls', '-allowed_extensions', 'ALL');
             } else {
-                inputArgs.push('-allowed_extensions', 'ALL', '-allowed_segment_extensions', 'ALL');
+                inputArgs.push('-allowed_extensions', 'ALL');
             }
 
             if (headerStr) inputArgs.push('-headers', headerStr);
@@ -330,9 +330,9 @@ export async function convertStreamToMp4({ streamUrl, outputPath, headers = {}, 
 
             if (audioUrl) {
                 if (audioUrl.includes('.jpg') || audioUrl.includes('.txt') || audioUrl.includes('.m3u8')) {
-                    inputArgs.push('-f', 'hls', '-allowed_extensions', 'ALL', '-allowed_segment_extensions', 'ALL');
+                    inputArgs.push('-f', 'hls', '-allowed_extensions', 'ALL');
                 } else {
-                    inputArgs.push('-allowed_extensions', 'ALL', '-allowed_segment_extensions', 'ALL');
+                    inputArgs.push('-allowed_extensions', 'ALL');
                 }
                 if (headerStr) inputArgs.push('-headers', headerStr);
                 inputArgs.push('-copyts');

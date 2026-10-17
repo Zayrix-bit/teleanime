@@ -32,6 +32,7 @@ import { searchAnime, getAnimeEpisodes, extractEpisodeStream, getCatalog, getCom
 import { extractAnimeTvPlusStream, getMalIdFromAniList } from './src/animeTvPlusScraper.js';
 import { markEpisodeUploaded, getVpsHindiAnimeList, getVpsHindiEpisodes, claimNextAnime, completeAnime, releaseAnime, markAnimeUnavailable, resetQueue } from './src/vpsTracker.js';
 import { ANSI, colorByProvider, logAnimeTv, logAnimeTvBold, logDesiAnime, logDesiAnimeBold, logThemed } from './src/logger.js';
+import { syncEpisodeToForumTopic, ensureAnimeTopic, attachForumButton } from './src/forumService.js';
 
 dotenv.config();
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
@@ -326,14 +327,19 @@ async function main() {
                                 logAnimeTv(`ℹ️ Resolution: ${meta.width}x${meta.height} | Duration: ${meta.duration.toFixed(1)}s | Size: ${meta.sizeMB} MB`);
 
                                 const epTitleStr = (epMeta && epMeta.episode_title) ? ` - ${epMeta.episode_title}` : '';
+                                const topicId = await ensureAnimeTopic(anime);
+                                const topicLink = topicId ? `https://t.me/newanimehindi2026/${topicId}` : 'https://t.me/newanimehindi2026';
+
                                 const caption = [
                                     `🎬 **${anime.title_english}${epTitleStr}**`,
                                     `📌 Episode: ${ep} / ${totalEps} (${anime.season})`,
-                                    `🌐 Source Provider: 👑 AnimeTVPlus (1080p Direct)`,
                                     `🔊 Audio: Hindi Dub (Multi-Audio)`,
                                     `📐 Resolution: ${meta.width}x${meta.height}`,
                                     `⏱ Duration: ${Math.floor(meta.duration / 60)}m ${Math.floor(meta.duration % 60)}s`,
-                                    `💾 Size: ${meta.sizeMB} MB`
+                                    `💾 Size: ${meta.sizeMB} MB`,
+                                    ``,
+                                    `📁 **Watch Full Anime in Forum Hub:**`,
+                                    `👉 ${topicLink}`
                                 ].join('\n');
 
                                 const uploadResult = await uploadVideo({
@@ -345,6 +351,11 @@ async function main() {
                                     height: meta.height,
                                     channelId: opts.channel || null
                                 });
+
+                                // Attach interactive [📁 Open Hindi Anime Forum Hub] button to the video
+                                try {
+                                    await attachForumButton(uploadResult.channelId, uploadResult.messageId, topicLink);
+                                } catch {}
 
                                 logAnimeTvBold(`\n==================================================`);
                                 logAnimeTvBold(`🎉 [Worker ${opts.workerId}] [EP ${ep}/${totalEps}] UPLOAD COMPLETE!`);
@@ -364,6 +375,16 @@ async function main() {
                                     durationSeconds: Math.round(meta.duration),
                                     serverUsed: 'AnimeTVPlus (1080p)'
                                 });
+
+                                try {
+                                    await syncEpisodeToForumTopic({
+                                        anime,
+                                        episodeNumber: ep,
+                                        telegramMessageId: uploadResult.messageId
+                                    });
+                                } catch (forumErr) {
+                                    console.warn(`[!] Forum topic sync error:`, forumErr.message);
+                                }
 
                                 episodeUploaded = true;
                             } catch (remuxUploadErr) {
@@ -425,14 +446,19 @@ async function main() {
                                     logDesiAnime(`ℹ️ Resolution: ${meta.width}x${meta.height} | Duration: ${meta.duration.toFixed(1)}s | Size: ${meta.sizeMB} MB`);
 
                                     const epTitleStr = (epMeta && epMeta.episode_title) ? ` - ${epMeta.episode_title}` : '';
+                                    const topicId = await ensureAnimeTopic(anime);
+                                    const topicLink = topicId ? `https://t.me/newanimehindi2026/${topicId}` : 'https://t.me/newanimehindi2026';
+
                                     const caption = [
                                         `🎬 **${anime.title_english}${epTitleStr}**`,
                                         `📌 Episode: ${ep} / ${totalEps} (${anime.season})`,
-                                        `🌐 Source Provider: DesiDubAnime [${activeServer}]`,
                                         `🔊 Audio: Hindi Dub (Multi-Audio)`,
                                         `📐 Resolution: ${meta.width}x${meta.height}`,
                                         `⏱ Duration: ${Math.floor(meta.duration / 60)}m ${Math.floor(meta.duration % 60)}s`,
-                                        `💾 Size: ${meta.sizeMB} MB`
+                                        `💾 Size: ${meta.sizeMB} MB`,
+                                        ``,
+                                        `📁 **Watch Full Anime in Forum Hub:**`,
+                                        `👉 ${topicLink}`
                                     ].join('\n');
 
                                     const uploadResult = await uploadVideo({
@@ -444,6 +470,11 @@ async function main() {
                                         height: meta.height,
                                         channelId: opts.channel || null
                                     });
+
+                                    // Attach interactive [📁 Open Hindi Anime Forum Hub] button to the video
+                                    try {
+                                        await attachForumButton(uploadResult.channelId, uploadResult.messageId, topicLink);
+                                    } catch {}
 
                                     logDesiAnimeBold(`\n==================================================`);
                                     logDesiAnimeBold(`🎉 [Worker ${opts.workerId}] [EP ${ep}/${totalEps}] UPLOAD COMPLETE!`);
@@ -464,6 +495,16 @@ async function main() {
                                         durationSeconds: Math.round(meta.duration),
                                         serverUsed: `DesiDubAnime (${activeServer})`
                                     });
+
+                                    try {
+                                        await syncEpisodeToForumTopic({
+                                            anime,
+                                            episodeNumber: ep,
+                                            telegramMessageId: uploadResult.messageId
+                                        });
+                                    } catch (forumErr) {
+                                        console.warn(`[!] Forum topic sync error:`, forumErr.message);
+                                    }
 
                                     episodeUploaded = true;
                                     break;
@@ -501,7 +542,8 @@ async function main() {
                 } else {
                     consecutiveErrors++;
                     if (consecutiveErrors >= 5) {
-                        console.error(`🚨 [Worker ${opts.workerId}] Anime "${anime.title_english}" failed 5 consecutive attempts. Skipping to next pending anime to prevent pipeline stall.`);
+                        console.error(`🚨 [Worker ${opts.workerId}] Anime "${anime.title_english}" failed 5 consecutive attempts. Marking Unavailable and skipping to next pending anime.`);
+                        await markAnimeUnavailable({ animeId: anime.id, anilistId: anime.anilist_id });
                         consecutiveErrors = 0;
                         processedAnime++;
                         break;
@@ -626,11 +668,9 @@ Options:
 
                 // STEP 4: UPLOAD TO TELEGRAM VIA MTPROTO
                 logEp(`▶ [Episode ${currentEp}/${endEp}] Uploading to Telegram channel...`);
-                const providerTag = resolved.serverName ? `🌐 Source Provider: ${resolved.serverName}` : `🌐 Source Provider: DesiDubAnime [${opts.server || 'Auto'}]`;
                 const defaultCaption = opts.caption || [
                     `🎬 **${videoTitle}**`,
                     resolved.episode ? `📌 Episode: ${resolved.episode}` : `📌 Episode: ${currentEp}`,
-                    providerTag,
                     `🔊 Audio: Hindi Dub (Multi-Audio)`,
                     `📐 Resolution: ${meta.width}x${meta.height}`,
                     `⏱ Duration: ${Math.floor(meta.duration / 60)}m ${Math.floor(meta.duration % 60)}s`,

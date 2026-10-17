@@ -1,6 +1,7 @@
 /**
- * TELEGRAM MTPROTO UPLOAD ENGINE (GramJS)
- * - Native Telegram MTProto Layer client
+ * TELEGRAM MTPROTO TURBO UPLOAD ENGINE (GramJS + Multi-Socket Pool)
+ * - Multi-Socket MTProto architecture (8-10 parallel TCP connections to DC)
+ * - 512 KB chunk size for maximum TCP throughput over high-latency links
  * - Fast chunked upload supporting files up to 2GB / 4GB
  * - Enables 'supportsStreaming' flag for instant Telegram in-app streaming
  * - Real-time terminal/CI progress reporting
@@ -11,8 +12,8 @@ import { StringSession } from 'telegram/sessions/index.js';
 import fs from 'fs';
 import path from 'path';
 import dotenv from 'dotenv';
-
 import { fileURLToPath } from 'url';
+import { createSenderPool, fastUploadFile, closeSenderPool } from './fastUpload.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -28,6 +29,7 @@ const SESSION_FILE = path.resolve(__dirname, '../.telegram_session.txt');
 
 let client = null;
 let channelEntity = null;
+let senderPool = null;
 
 function getCredentials() {
     return {
@@ -39,7 +41,7 @@ function getCredentials() {
 }
 
 /**
- * Initializes and connects the Telegram MTProto client.
+ * Initializes and connects the Telegram MTProto client and multi-socket pool.
  */
 export async function initTelegram(channelIdOverride = null) {
     const { API_ID, API_HASH, BOT_TOKEN, DEFAULT_CHANNEL_ID } = getCredentials();
@@ -83,11 +85,18 @@ export async function initTelegram(channelIdOverride = null) {
     channelEntity = await client.getEntity(targetChannel);
     console.log(`✅ Target Channel Ready: "${channelEntity.title || channelEntity.id}"`);
 
+    // Initialize 8-socket Turbo MTProto Pool
+    try {
+        senderPool = await createSenderPool(client, 8);
+    } catch (poolErr) {
+        console.warn(`[!] Turbo pool setup notice: ${poolErr.message}`);
+    }
+
     return client;
 }
 
 /**
- * Uploads a local MP4 file to the Telegram channel.
+ * Uploads a local MP4 file to the Telegram channel at turbo speed.
  * 
  * @param {Object} options
  * @param {string} options.filePath - Path to local .mp4 video file
@@ -120,18 +129,46 @@ export async function uploadVideo({
     const cleanFileName = fileName || path.basename(filePath);
 
     console.log(`\n==================================================`);
-    console.log(`🚀 STARTING TELEGRAM UPLOAD`);
+    console.log(`🚀 STARTING TELEGRAM TURBO UPLOAD (Multi-Socket MTProto)`);
     console.log(`   File: ${cleanFileName}`);
     console.log(`   Size: ${totalSizeMB} MB`);
     console.log(`   Resolution: ${width}x${height} | Duration: ${Math.round(duration)}s`);
     console.log(`==================================================`);
 
-    let lastLoggedPercent = -1;
     const startTime = Date.now();
+    let inputFile = null;
+
+    // Make sure Turbo Sender Pool is ready
+    if (!senderPool || senderPool.length === 0) {
+        try {
+            senderPool = await createSenderPool(client, 8);
+        } catch (e) {
+            console.warn(`[!] Sender pool refresh note: ${e.message}`);
+        }
+    }
+
+    try {
+        // Parallel MTProto chunk upload over 8 sockets with 512KB chunks
+        inputFile = await fastUploadFile({
+            client,
+            senders: senderPool,
+            filePath,
+            fileName: cleanFileName,
+            concurrency: 10,
+            onProgress: (frac, percent, uploadedMB, totalMB, speedMBs) => {
+                console.log(`[Upload Progress] ${percent}% (${uploadedMB} MB / ${totalMB} MB) @ ${speedMBs} MB/s`);
+            }
+        });
+    } catch (uploadErr) {
+        console.warn(`[!] Turbo parallel upload hit error: ${uploadErr.message}. Falling back to standard upload...`);
+        inputFile = filePath;
+    }
+
+    console.log(`[*] Chunks uploaded. Finalizing Telegram media message...`);
 
     const sent = await client.sendFile(channelEntity, {
-        file: filePath,
-        workers: 16,
+        file: inputFile,
+        workers: 8,
         caption: caption || `🎬 **${cleanFileName}**\n💾 Size: ${totalSizeMB} MB`,
         attributes: [
             new Api.DocumentAttributeFilename({
@@ -145,21 +182,12 @@ export async function uploadVideo({
             })
         ],
         forceDocument: false,
-        supportsStreaming: true,
-        progressCallback: (progress) => {
-            const percent = Math.floor(progress * 100);
-            if (percent !== lastLoggedPercent && percent % 10 === 0) {
-                lastLoggedPercent = percent;
-                const elapsedSec = ((Date.now() - startTime) / 1000) || 1;
-                const uploadedMB = (stats.size * progress / (1024 * 1024)).toFixed(2);
-                const speedMBs = (uploadedMB / elapsedSec).toFixed(2);
-                console.log(`[Upload Progress] ${percent}% (${uploadedMB} MB / ${totalSizeMB} MB) @ ${speedMBs} MB/s`);
-            }
-        }
+        supportsStreaming: true
     });
 
     const elapsedTotal = ((Date.now() - startTime) / 1000).toFixed(1);
-    console.log(`\n🎉 UPLOAD COMPLETE in ${elapsedTotal}s!`);
+    const overallSpeed = (stats.size / (1024 * 1024) / (elapsedTotal || 1)).toFixed(2);
+    console.log(`\n🎉 TURBO UPLOAD COMPLETE in ${elapsedTotal}s @ ${overallSpeed} MB/s!`);
     console.log(`   Message ID: ${sent.id}`);
 
     // Clean channel identifier for direct links
@@ -178,9 +206,15 @@ export async function uploadVideo({
 }
 
 /**
- * Disconnects the client cleanly.
+ * Disconnects the client and sender pool cleanly.
  */
 export async function closeTelegram() {
+    if (senderPool) {
+        try {
+            await closeSenderPool(senderPool);
+        } catch {}
+        senderPool = null;
+    }
     if (client) {
         try {
             await client.disconnect();
